@@ -1,0 +1,32 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "test.py",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "args": [
+                "-eid",
+                "recon",
+                "-d",
+                "data/results/models/recon/checkpoint_0200000.pth.tar"
+            ],
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "train.py",
+            "type": "python",
+            "args": [
+                "-eid",
+                "recon"
+            ],
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal"
+        }
+    ]
+}
