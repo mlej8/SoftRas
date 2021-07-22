@@ -14,6 +14,32 @@ import os
 from datetime import datetime
 import logging
 
+CLASS_IDS_ALL = (
+    '02691156,02828884,02933112,02958343,03001627,03211117,03636649,' +
+    '03691459,04090263,04256520,04379243,04401088,04530566')
+
+BATCH_SIZE = 64
+LEARNING_RATE = 1e-4
+LR_TYPE = 'step'
+NUM_ITERATIONS = 250000
+
+LAMBDA_LAPLACIAN = 5e-3
+LAMBDA_FLATTEN = 5e-4
+
+PRINT_FREQ = 100
+DEMO_FREQ = 1000
+SAVE_FREQ = 10000
+RANDOM_SEED = 0
+
+MODEL_DIRECTORY = 'data/results/models'
+DATASET_DIRECTORY = 'data/datasets'
+
+IMAGE_SIZE = 64
+SIGMA_VAL = 1e-4
+START_ITERATION = 0
+
+RESUME_PATH = ''
+
 date_time = datetime.now().strftime("%Y-%m-%d-%H-%M")
 os.makedirs("logs", exist_ok=True)
 log_filename = "logs/continual-learning-{}.log".format(date_time)
@@ -25,6 +51,7 @@ if not os.path.isfile(log_filename):
 logging.basicConfig(filename=log_filename,
                     level=logging.INFO,
                     format="%(asctime)s %(name)s %(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
 
 
 def train(dataset_train, model, optimizer, directory_output, image_output, args):
@@ -33,7 +60,7 @@ def train(dataset_train, model, optimizer, directory_output, image_output, args)
     data_time = AverageMeter()
     losses = AverageMeter()
 
-    for i in range(start_iter, args.num_iterations + 1):
+    for i in range(START_ITERATION, args.num_iterations + 1):
         # adjust learning rate and sigma_val (decay after 150k iter)
         lr = adjust_learning_rate(
             [optimizer], args.learning_rate, i, method=args.lr_type)
@@ -91,16 +118,16 @@ def train(dataset_train, model, optimizer, directory_output, image_output, args)
 
         # print
         if i % args.print_freq == 0:
-            print('Iter: [{0}/{1}]\t'
-                  'Time {batch_time.val:.3f}\t'
-                  'Loss {loss.val:.3f}\t'
-                  'lr {lr:.6f}\t'
-                  'sv {sv:.6f}\t'.format(i, args.num_iterations,
-                                         batch_time=batch_time, loss=losses,
-                                         lr=lr, sv=model.rasterizer.sigma_val))
+            logger.info('Iter: [{0}/{1}]\t'
+                        'Time {batch_time.val:.3f}\t'
+                        'Loss {loss.val:.3f}\t'
+                        'lr {lr:.6f}\t'
+                        'sv {sv:.6f}\t'.format(i, args.num_iterations,
+                                               batch_time=batch_time, loss=losses,
+                                               lr=lr, sv=model.rasterizer.sigma_val))
 
 
-def test(dataset_val, model, directory_mesh, ):
+def test(dataset_val, model, directory_mesh):
     end = time.time()
 
     batch_time = AverageMeter()
@@ -140,20 +167,20 @@ def test(dataset_val, model, directory_mesh, ):
 
             # print loss
             if i % args.print_freq == 0:
-                print('Iter: [{0}/{1}]\t'
-                      'Time {batch_time.val:.3f}\t'
-                      'IoU {2:.3f}\t'.format(i, ((dataset_val.num_data[class_id] * 24) // args.batch_size),
-                                             batch_iou.mean(),
-                                             batch_time=batch_time))
+                logger.info('Iter: [{0}/{1}]\t'
+                            'Time {batch_time.val:.3f}\t'
+                            'IoU {2:.3f}\t'.format(i, ((dataset_val.num_data[class_id] * 24) // args.batch_size),
+                                                   batch_iou.mean(),
+                                                   batch_time=batch_time))
 
         iou_cls = iou / 24. / dataset_val.num_data[class_id] * 100
         iou_all.append(iou_cls)
-        print('=================================')
-        print('Mean IoU: %.3f for class %s' % (iou_cls, class_name))
-        print('\n')
+        logger.info('=================================')
+        logger.info('Mean IoU: %.3f for class %s' % (iou_cls, class_name))
+        logger.info('\n')
 
-    print('=================================')
-    print('Mean IoU: %.3f for all classes' % (sum(iou_all) / len(iou_all)))
+    logger.info('=================================')
+    logger.info('Mean IoU: %.3f for all classes' % (sum(iou_all) / len(iou_all)))
 
 
 def adjust_learning_rate(optimizers, learning_rate, i, method):
@@ -164,7 +191,7 @@ def adjust_learning_rate(optimizers, learning_rate, i, method):
     elif method == 'constant':
         lr = learning_rate
     else:
-        print("no such learing rate type")
+        logger.info("no such learing rate type")
 
     for optimizer in optimizers:
         for param_group in optimizer.param_groups:
@@ -180,31 +207,6 @@ def adjust_sigma(sigma, i):
 
 
 if __name__ == "__main__":
-    CLASS_IDS_ALL = (
-        '02691156,02828884,02933112,02958343,03001627,03211117,03636649,' +
-        '03691459,04090263,04256520,04379243,04401088,04530566')
-
-    BATCH_SIZE = 64
-    LEARNING_RATE = 1e-4
-    LR_TYPE = 'step'
-    NUM_ITERATIONS = 250000
-
-    LAMBDA_LAPLACIAN = 5e-3
-    LAMBDA_FLATTEN = 5e-4
-
-    PRINT_FREQ = 100
-    DEMO_FREQ = 1000
-    SAVE_FREQ = 10000
-    RANDOM_SEED = 0
-
-    MODEL_DIRECTORY = 'data/results/models'
-    DATASET_DIRECTORY = 'data/datasets'
-
-    IMAGE_SIZE = 64
-    SIGMA_VAL = 1e-4
-    START_ITERATION = 0
-
-    RESUME_PATH = ''
 
     # arguments
     parser = argparse.ArgumentParser()
@@ -241,6 +243,12 @@ if __name__ == "__main__":
     torch.cuda.manual_seed_all(args.seed)
     np.random.seed(args.seed)
 
+    # setup model & optimizer
+    model = models.Model('data/obj/sphere/sphere_642.obj', args=args)
+    model = model.cuda()
+
+    optimizer = torch.optim.Adam(model.model_param(), args.learning_rate)
+
     # train output directories
     directory_output = os.path.join(args.model_directory, args.experiment_id, date_time)
     os.makedirs(directory_output, exist_ok=True)
@@ -248,30 +256,23 @@ if __name__ == "__main__":
     os.makedirs(image_output, exist_ok=True)
 
     # test output directories
-    test_directory_output = 'data/results/test/{}'.format(date_time)
-    os.makedirs(test_directory_output, exist_ok=True)
-    directory_mesh = os.path.join(test_directory_output, args.experiment_id)
+    directory_mesh = os.path.join(directory_output, 'test')
     os.makedirs(directory_mesh, exist_ok=True)
-
-    # setup model & optimizer
-    model = models.Model('data/obj/sphere/sphere_642.obj', args=args)
-    model = model.cuda()
-
-    optimizer = torch.optim.Adam(model.model_param(), args.learning_rate)
-
-    start_iter = START_ITERATION
-    if args.resume_path:
-        state_dicts = torch.load(args.resume_path)
-        model.load_state_dict(state_dicts['model'])
-        optimizer.load_state_dict(state_dicts['optimizer'])
-        start_iter = int(os.path.split(args.resume_path)
-                         [1][11:].split('.')[0]) + 1
-        print('Resuming from %s iteration' % start_iter)
-
+    num_set = 4
     class_ids = args.class_ids.split(',')
-    train_ids = val_ids = [class_ids.pop()]
 
-    while class_ids:
+    # exclude one class to make 4 sets of 3 classes
+    class_ids.pop()
+
+    # TODO: set an argument for the number of classes in
+    train_ids = val_ids = [class_ids.pop(), class_ids.pop(), class_ids.pop()]
+
+    while num_set:
+        # display current classes that we are training/validating on
+        logger.info(
+            f"Training on {train_ids} which correspond to {[datasets.class_ids_map.get(train_id) for train_id in train_ids]}")
+        logger.info(
+            f"Validating on {val_ids} which correspond to {[datasets.class_ids_map.get(val_id) for val_id in val_ids]}")
 
         model.train()
         dataset_train = datasets.ShapeNet(
@@ -286,5 +287,12 @@ if __name__ == "__main__":
         dataset_val = datasets.ShapeNet(args.dataset_directory, val_ids, 'val')
         test(dataset_val, model, directory_mesh=directory_mesh)
 
-        val_ids = train_ids
-        train_ids.append(class_ids.pop())
+        num_set -= 1
+        if num_set:
+            new_class1 = class_ids.pop()
+            new_class2 = class_ids.pop()
+            new_class3 = class_ids.pop()
+            train_ids = [new_class1, new_class2, new_class3]
+            val_ids.append(new_class1)
+            val_ids.append(new_class2)
+            val_ids.append(new_class3)
