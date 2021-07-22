@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch import autograd
 
 import soft_renderer as sr
 import soft_renderer.functional as srf
@@ -87,8 +88,11 @@ class Decoder(nn.Module):
 
 
 class Model(nn.Module):
-    def __init__(self, filename_obj, args):
+    def __init__(self, filename_obj, args, lamda=40):
         super(Model, self).__init__()
+
+        # lambda for ewc loss which sets how important the old task is compared with the new one
+        self.lamda = lamda
 
         # auto-encoder
         self.encoder = Encoder(im_size=args.image_size)
@@ -151,3 +155,65 @@ class Model(nn.Module):
             return self.render_multiview(images[0], images[1], viewpoints[0], viewpoints[1])
         elif task == 'test':
             return self.evaluate_iou(images, voxels)
+
+    def ewc_loss(self, cuda=False):
+        try:
+            losses = []
+            for n, p in self.named_parameters():
+                # retrieve the consolidated mean and fisher information.
+                n = n.replace('.', '__')
+                mean = torch.tensor(getattr(self, '{}_mean'.format(n)))
+                fisher = torch.tensor(getattr(self, '{}_fisher'.format(n)))
+                # calculate a ewc loss. (assumes the parameter's prior as
+                # gaussian distribution with the estimated mean and the
+                # estimated cramer-rao lower bound variance, which is
+                # equivalent to the inverse of fisher information)
+                losses.append((fisher * (p-mean)**2).sum())
+            return (self.lamda/2)*sum(losses)
+        except AttributeError:
+            # ewc loss is 0 if there's no consolidated parameters.
+            return (
+                torch.zeros(1).cuda() if cuda else
+                torch.zeros(1)
+            )
+    
+    def estimate_fisher(self, dataset, sample_size, batch_size=32):
+        # sample loglikelihoods from the dataset.
+        data_loader = DataLoader(
+        dataset, batch_size=batch_size,
+        shuffle=True, collate_fn=(collate_fn or default_collate),
+        **({'num_workers': 2, 'pin_memory': True})
+        )
+ 
+        loglikelihoods = []
+        for x, y in data_loader:
+            x = x.view(batch_size, -1)
+            x = x.cuda() if self._is_on_cuda() else x
+            y = y.cuda() if self._is_on_cuda() else y
+            loglikelihoods.append(
+                F.log_softmax(self(x), dim=1)[range(batch_size), y.data]
+            )
+            if len(loglikelihoods) >= sample_size // batch_size:
+                break
+        # estimate the fisher information of the parameters.
+        loglikelihoods = torch.cat(loglikelihoods).unbind()
+        loglikelihood_grads = zip(*[autograd.grad(
+            l, self.parameters(),
+            retain_graph=(i < len(loglikelihoods))
+        ) for i, l in enumerate(loglikelihoods, 1)])
+        loglikelihood_grads = [torch.stack(gs) for gs in loglikelihood_grads]
+        fisher_diagonals = [(g ** 2).mean(0) for g in loglikelihood_grads]
+        param_names = [
+            n.replace('.', '__') for n, p in self.named_parameters()
+        ]
+        return {n: f.detach() for n, f in zip(param_names, fisher_diagonals)}
+
+    def consolidate(self, fisher):
+        for n, p in self.named_parameters():
+            n = n.replace('.', '__')
+            self.register_buffer('{}_mean'.format(n), p.data.clone())
+            self.register_buffer('{}_fisher'
+                                 .format(n), fisher[n].data.clone())
+
+    def _is_on_cuda(self):
+        return next(self.parameters()).is_cuda

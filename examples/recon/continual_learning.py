@@ -53,11 +53,12 @@ def train(dataset_train, model, optimizer, directory_output, image_output, args)
                                                             task='train')
         laplacian_loss = laplacian_loss.mean()
         flatten_loss = flatten_loss.mean()
+        ewc_loss = model.ewc_loss(cuda=True)
 
         # compute loss
         loss = multiview_iou_loss(render_images, images_a, images_b) + \
             args.lambda_laplacian * laplacian_loss + \
-            args.lambda_flatten * flatten_loss
+            args.lambda_flatten * flatten_loss + ewc_loss
         losses.update(loss.data.item(), images_a.size(0))
 
         # compute gradient and optimize
@@ -234,6 +235,8 @@ if __name__ == "__main__":
     parser.add_argument('-df', '--demo-freq', type=int, default=DEMO_FREQ)
     parser.add_argument('-sf', '--save-freq', type=int, default=SAVE_FREQ)
     parser.add_argument('-s', '--seed', type=int, default=RANDOM_SEED)
+    parser.add_argument('--fisher_estimation_sample_size', type=int, default=1024)
+
     args = parser.parse_args()
 
     torch.backends.cudnn.deterministic = True
@@ -278,6 +281,9 @@ if __name__ == "__main__":
             args.dataset_directory, train_ids, 'train')
         train(dataset_train=dataset_train, model=model,
               optimizer=optimizer, directory_output=directory_output, image_output=image_output, args=args)
+        model.consolidate(model.estimate_fisher(
+            dataset_train, args.fisher_estimation_sample_size
+        ))
 
         # delete train dataset to free memory
         del dataset_train
