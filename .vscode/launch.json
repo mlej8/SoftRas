@@ -27,6 +27,17 @@
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal"
+        },
+        {
+            "name": "continual_learning.py",
+            "type": "python",
+            "args": [
+                "-eid",
+                "cl"
+            ],
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal"
         }
     ]
 }

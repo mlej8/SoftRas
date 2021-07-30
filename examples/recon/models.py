@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import autograd
+from torch.utils.data import DataLoader
 
 import soft_renderer as sr
 import soft_renderer.functional as srf
@@ -176,15 +177,15 @@ class Model(nn.Module):
                 torch.zeros(1).cuda() if cuda else
                 torch.zeros(1)
             )
-    
+
     def estimate_fisher(self, dataset, sample_size, batch_size=32):
         # sample loglikelihoods from the dataset.
         data_loader = DataLoader(
-        dataset, batch_size=batch_size,
-        shuffle=True, collate_fn=(collate_fn or default_collate),
-        **({'num_workers': 2, 'pin_memory': True})
+            dataset, batch_size=batch_size,
+            shuffle=True,
+            **({'num_workers': 2, 'pin_memory': True})
         )
- 
+
         loglikelihoods = []
         for x, y in data_loader:
             x = x.view(batch_size, -1)
