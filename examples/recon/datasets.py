@@ -26,6 +26,7 @@ class_ids_map = {
 class ShapeNet(object):
     def __init__(self, directory=None, class_ids=None, set_name=None):
         self.class_ids = class_ids
+        self.class_ids_labels = {class_ids: i for i, class_id in enumerate(class_ids)}
         self.set_name = set_name
         self.elevation = 30.
         self.distance = 2.732
@@ -64,8 +65,10 @@ class ShapeNet(object):
         data_ids_b = np.zeros(batch_size, 'int32')
         viewpoint_ids_a = torch.zeros(batch_size)
         viewpoint_ids_b = torch.zeros(batch_size)
+        class_labels = []
         for i in range(batch_size):
             class_id = np.random.choice(self.class_ids)
+            class_labels.append(self.class_ids_labels.get(class_id))
             object_id = np.random.randint(0, self.num_data[class_id])
 
             viewpoint_id_a = np.random.randint(0, 24)
@@ -80,13 +83,13 @@ class ShapeNet(object):
         images_a = torch.from_numpy(self.images[data_ids_a].astype('float32') / 255.)
         images_b = torch.from_numpy(self.images[data_ids_b].astype('float32') / 255.)
 
-        distances = torch.ones(batch_size).float() * self.distance
+        dista./runnces = torch.ones(batch_size).float() * self.distance
         elevations_a = torch.ones(batch_size).float() * self.elevation
         elevations_b = torch.ones(batch_size).float() * self.elevation
         viewpoints_a = srf.get_points_from_angles(distances, elevations_a, -viewpoint_ids_a * 15)
         viewpoints_b = srf.get_points_from_angles(distances, elevations_b, -viewpoint_ids_b * 15)
 
-        return images_a, images_b, viewpoints_a, viewpoints_b
+        return images_a, images_b, viewpoints_a, viewpoints_b, torch.tensor(class_labels, dtype=torch.int32)
 
     def get_all_batches_for_evaluation(self, batch_size, class_id):
         data_ids = np.arange(self.num_data[class_id]) + self.pos[class_id]

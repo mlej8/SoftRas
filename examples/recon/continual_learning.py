@@ -32,7 +32,7 @@ SAVE_FREQ = 10000
 RANDOM_SEED = 0
 
 MODEL_DIRECTORY = 'data/results/models'
-DATASET_DIRECTORY = 'data/datasets'
+DATASET_DIRECTORY = '/mnt/e/Data/mesh_reconstruction'
 
 IMAGE_SIZE = 64
 SIGMA_VAL = 1e-4
@@ -67,7 +67,7 @@ def train(dataset_train, model, optimizer, directory_output, image_output, args)
         model.set_sigma(adjust_sigma(args.sigma_val, i))
 
         # load images from multi-view
-        images_a, images_b, viewpoints_a, viewpoints_b = dataset_train.get_random_batch(args.batch_size)
+        images_a, images_b, viewpoints_a, viewpoints_b, labels = dataset_train.get_random_batch(args.batch_size)
         images_a = images_a.cuda()
         images_b = images_b.cuda()
         viewpoints_a = viewpoints_a.cuda()
@@ -76,7 +76,7 @@ def train(dataset_train, model, optimizer, directory_output, image_output, args)
         # soft render images
         render_images, laplacian_loss, flatten_loss = model([images_a, images_b],
                                                             [viewpoints_a,
-                                                                viewpoints_b],
+                                                                viewpoints_b], labels
                                                             task='train')
         laplacian_loss = laplacian_loss.mean()
         flatten_loss = flatten_loss.mean()
@@ -265,7 +265,9 @@ if __name__ == "__main__":
     class_ids = args.class_ids.split(',')
 
     # exclude one class to make 4 sets of 3 classes
-    class_ids.pop()
+    class_ids.pop(0)build
+
+    class_ids.pop(1)
 
     # TODO: set an argument for the number of classes in
     train_ids = val_ids = [class_ids.pop(), class_ids.pop(), class_ids.pop()]

@@ -85,11 +85,27 @@ class Decoder(nn.Module):
         vertices = vertices * 0.5
         faces = self.faces[None, :, :].repeat(batch_size, 1, 1)
 
+        print(vertices.shape)
+        print(faces.shape)
         return vertices, faces
 
 
+class Classifier(nn.Module):
+    def __init__(self, num_classes):
+        self.fc1 = nn.Linear()
+        self.fc2 = nn.Linear()
+
+    def forward(self, vertices, faces):
+
+        # substitute vertex indices with vertex coordinates in each face
+        output
+        return
+        # self.fc1 = nn.Linear()
+        # self.fc2 = nn.Linear()
+
+
 class Model(nn.Module):
-    def __init__(self, filename_obj, args, lamda=40):
+    def __init__(self, filename_obj, args, lamda=40):  # num_classes,
         super(Model, self).__init__()
 
         # lambda for ewc loss which sets how important the old task is compared with the new one
@@ -119,7 +135,7 @@ class Model(nn.Module):
         vertices, faces = self.decoder(self.encoder(images))
         return vertices, faces
 
-    def render_multiview(self, image_a, image_b, viewpoint_a, viewpoint_b):
+    def render_multiview(self, image_a, image_b, viewpoint_a, viewpoint_b, labels):
         # [Ia, Ib]
         images = torch.cat((image_a, image_b), dim=0)
         # [Va, Va, Vb, Vb], set viewpoints
@@ -129,6 +145,10 @@ class Model(nn.Module):
         vertices, faces = self.reconstruct(images)
         laplacian_loss = self.laplacian_loss(vertices)
         flatten_loss = self.flatten_loss(vertices)
+
+        # add CE loss
+        predictions = self.classifier(vertices, faces)
+        ce_loss = self.ce(predictions, labels)
 
         # [Ma, Mb, Ma, Mb]
         vertices = torch.cat((vertices, vertices), dim=0)
@@ -151,9 +171,9 @@ class Model(nn.Module):
         iou = (voxels * voxels_predict).sum((1, 2, 3)) / (0 < (voxels + voxels_predict)).sum((1, 2, 3))
         return iou, vertices, faces
 
-    def forward(self, images=None, viewpoints=None, voxels=None, task='train'):
+    def forward(self, images=None, viewpoints=None, voxels=None, labels=None task='train'):
         if task == 'train':
-            return self.render_multiview(images[0], images[1], viewpoints[0], viewpoints[1])
+            return self.render_multiview(images[0], images[1], viewpoints[0], viewpoints[1], labels)
         elif task == 'test':
             return self.evaluate_iou(images, voxels)
 

@@ -30,7 +30,7 @@ SAVE_FREQ = 10000
 RANDOM_SEED = 0
 
 MODEL_DIRECTORY = 'data/results/models'
-DATASET_DIRECTORY = 'data/datasets'
+DATASET_DIRECTORY = '/mnt/e/Data/mesh_reconstruction'
 
 IMAGE_SIZE = 64
 SIGMA_VAL = 1e-4
@@ -134,7 +134,7 @@ def train():
             torch.save({
                 'model': model.state_dict(),
                 'optimizer': optimizer.state_dict(),
-                }, model_path)
+            }, model_path)
 
         # save demo images
         if i % args.demo_freq == 0:

@@ -23,7 +23,7 @@ PRINT_FREQ = 100
 SAVE_FREQ = 100
 
 MODEL_DIRECTORY = './data/models'
-DATASET_DIRECTORY = './data/datasets'
+DATASET_DIRECTORY = '/mnt/e/Data/mesh_reconstruction'
 
 SIGMA_VAL = 0.01
 IMAGE_PATH = ''
