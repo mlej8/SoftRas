@@ -61,7 +61,7 @@ def train(dataset_train, model, optimizer, directory_output, image_output, args)
     losses = AverageMeter()
 
     # loss function
-    loss_fn = nn.CrossEntropy()
+    classification_loss_fn = torch.nn.CrossEntropyLoss()
 
     for i in range(START_ITERATION, args.num_iterations + 1):
         # adjust learning rate and sigma_val (decay after 150k iter)
@@ -70,28 +70,25 @@ def train(dataset_train, model, optimizer, directory_output, image_output, args)
         model.set_sigma(adjust_sigma(args.sigma_val, i))
 
         # load images from multi-view
-        images_a, images_b, viewpoints_a, viewpoints_b, labels = dataset_train.get_random_batch(args.batch_size)
-        images_a = images_a.cuda()
-        images_b = images_b.cuda()
-        viewpoints_a = viewpoints_a.cuda()
-        viewpoints_b = viewpoints_b.cuda()
+        images_a, images_b, viewpoints_a, viewpoints_b, labels = [
+            tensor.to(args.device) for tensor in dataset_train.get_random_batch(args.batch_size)]
 
         # soft render images
-        render_images, laplacian_loss, flatten_loss, class_predictions = model([images_a, images_b],
-                                                                               [viewpoints_a,
-                                                                                viewpoints_b],
+        render_images, laplacian_loss, flatten_loss, class_predictions = model(images=[images_a, images_b],
+                                                                               viewpoints=[viewpoints_a,
+                                                                                           viewpoints_b],
                                                                                task='train')
 
         # compute classification lsos
-        ce_loss = loss_fn(class_predictions, labels)
+        ce_loss = classification_loss_fn(class_predictions, labels)
         laplacian_loss = laplacian_loss.mean()
         flatten_loss = flatten_loss.mean()
-        ewc_loss = model.ewc_loss(cuda=True)
+        # ewc_loss = model.ewc_loss(cuda=True)
 
         # compute loss
         loss = multiview_iou_loss(render_images, images_a, images_b) + \
             args.lambda_laplacian * laplacian_loss + \
-            args.lambda_flatten * flatten_loss + ewc_loss + ce_loss
+            args.lambda_flatten * flatten_loss + ce_loss  # + ewc_loss
         losses.update(loss.data.item(), images_a.size(0))
 
         # compute gradient and optimize
@@ -151,7 +148,7 @@ def test(dataset_val, model, directory_mesh):
         iou = 0
 
         for i, (im, vx) in enumerate(dataset_val.get_all_batches_for_evaluation(args.batch_size, class_id)):
-            images = torch.autograd.Variable(im).cuda()
+            images = torch.autograd.Variable(im).to(device)
             voxels = vx.numpy()
 
             batch_iou, vertices, faces = model(
@@ -244,8 +241,10 @@ if __name__ == "__main__":
     parser.add_argument('-sf', '--save-freq', type=int, default=SAVE_FREQ)
     parser.add_argument('-s', '--seed', type=int, default=RANDOM_SEED)
     parser.add_argument('--fisher_estimation_sample_size', type=int, default=1024)
+    parser.add_argument('--k', type=int, default=3)
 
     args = parser.parse_args()
+    args.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     torch.backends.cudnn.deterministic = True
     torch.manual_seed(args.seed)
@@ -253,8 +252,8 @@ if __name__ == "__main__":
     np.random.seed(args.seed)
 
     # setup model & optimizer
-    model = models.Model('data/obj/sphere/sphere_642.obj', args=args)
-    model = model.cuda()
+    model = models.Model('data/obj/sphere/sphere_642.obj', args=args, num_classes=args.k)
+    model = model.to(args.device)
 
     optimizer = torch.optim.Adam(model.model_param(), args.learning_rate)
 
@@ -267,14 +266,14 @@ if __name__ == "__main__":
     # test output directories
     directory_mesh = os.path.join(directory_output, 'test')
     os.makedirs(directory_mesh, exist_ok=True)
-    num_set = 4
+    num_set = len(datasets.class_ids_map) // args.k
     class_ids = args.class_ids.split(',')
 
     # exclude one class to make 4 sets of 3 classes
     class_ids.pop()
 
     # TODO: set an argument for the number of classes in
-    train_ids = val_ids = [class_ids.pop(), class_ids.pop(), class_ids.pop()]
+    train_ids = val_ids = [class_ids.pop() for i in range(args.k)]
 
     while num_set:
         # display current classes that we are training/validating on
@@ -288,9 +287,9 @@ if __name__ == "__main__":
             args.dataset_directory, train_ids, 'train')
         train(dataset_train=dataset_train, model=model,
               optimizer=optimizer, directory_output=directory_output, image_output=image_output, args=args)
-        model.consolidate(model.estimate_fisher(
-            dataset_train, args.fisher_estimation_sample_size
-        ))
+        # model.consolidate(model.estimate_fisher(
+        #     dataset_train, args.fisher_estimation_sample_size
+        # ))
 
         # delete train dataset to free memory
         del dataset_train
@@ -301,10 +300,5 @@ if __name__ == "__main__":
 
         num_set -= 1
         if num_set:
-            new_class1 = class_ids.pop()
-            new_class2 = class_ids.pop()
-            new_class3 = class_ids.pop()
-            train_ids = [new_class1, new_class2, new_class3]
-            val_ids.append(new_class1)
-            val_ids.append(new_class2)
-            val_ids.append(new_class3)
+            train_ids = [class_ids.pop() for i in range(args.k)]
+            val_ids.extend(train_ids)

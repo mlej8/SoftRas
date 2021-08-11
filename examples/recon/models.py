@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import autograd
 from torch.utils.data import DataLoader
-from torchvision import models
+from torchvision import models, transforms
 
 import soft_renderer as sr
 import soft_renderer.functional as srf
@@ -86,8 +86,6 @@ class Decoder(nn.Module):
         vertices = vertices * 0.5
         faces = self.faces[None, :, :].repeat(batch_size, 1, 1)
 
-        print(vertices.shape)
-        print(faces.shape)
         return vertices, faces
 
 
@@ -100,40 +98,47 @@ class MVCNN(nn.Module):
         model = models.vgg11(pretrained=pretrained)
         self.feature_extractor = model.features
         self.classifier = model.classifier
-        self.net_2._modules['6'] = nn.Linear(4096, num_classes)
+        self.classifier[6] = nn.Linear(self.classifier[6].in_features, num_classes)
+        self.transform = transforms.Resize((224, 224))
 
-    def forward(self, image):
-        batch_size = image.shape[0]
-        output = self.feature_extractor(image)
-        output = output.view(batch_size//self.num_views, self.num_views,
-                   output.shape[-3], output.shape[-2], output.shape[-1]))
-        return self.classifier(torch.max(output, 1)[0].view(output.shape[0], -1))
+    def forward(self, images):
+        # resize the images
+        images = self.transform(images)
+
+        # NOTE: validate that original paper concats all the views together as follows.
+        output = self.feature_extractor(images)
+        output = output.view(images.shape[0]//self.num_views, self.num_views,
+                             output.shape[-3], output.shape[-2], output.shape[-1])
+
+        # view pooling layer (pooling along the view dimension - maximum operation across the views)
+        max_values, _indices = torch.max(output, dim=1)
+
+        return self.classifier(max_values.view(output.shape[0], -1))
 
 
 class Model(nn.Module):
-    def __init__(self, filename_obj, args, num_classes, num_views = 4, lamda = 40, pretrained = True):
+    def __init__(self, filename_obj, args, num_classes, num_views=4, lamda=40, pretrained=True):
         super(Model, self).__init__()
 
         # lambda for ewc loss which sets how important the old task is compared with the new one
-        self.lamda=lamda
+        self.lamda = lamda
 
         # auto-encoder
-        self.encoder=Encoder(im_size = args.image_size)
-        self.decoder=Decoder(filename_obj)
+        self.encoder = Encoder(im_size=args.image_size)
+        self.decoder = Decoder(filename_obj)
 
         # renderer
-        self.transform=sr.LookAt(viewing_angle = 15)
-        self.lighting=sr.Lighting()
-        self.rasterizer=sr.SoftRasterizer(image_size = args.image_size, sigma_val = args.sigma_val,
-                                            aggr_func_rgb = 'hard', aggr_func_alpha = 'prod', dist_eps = 1e-10)
+        self.transform = sr.LookAt(viewing_angle=15)
+        self.lighting = sr.Lighting()
+        self.rasterizer = sr.SoftRasterizer(image_size=args.image_size, sigma_val=args.sigma_val,
+                                            aggr_func_rgb='hard', aggr_func_alpha='prod', dist_eps=1e-10)
 
         # mesh regularizer
-        self.laplacian_loss=sr.LaplacianLoss(self.decoder.vertices_base, self.decoder.faces)
-        self.flatten_loss=sr.FlattenLoss(self.decoder.faces)
+        self.laplacian_loss = sr.LaplacianLoss(self.decoder.vertices_base, self.decoder.faces)
+        self.flatten_loss = sr.FlattenLoss(self.decoder.faces)
 
         # classifier
-        self.mvcnn=MVCNN(num_classes, num_views, pretrained)
-        self.ce_loss=nn.CrossEntropyLoss()
+        self.mvcnn = MVCNN(num_classes, num_views, pretrained)
 
     def model_param(self):
         return list(self.encoder.parameters()) + list(self.decoder.parameters())
@@ -142,57 +147,60 @@ class Model(nn.Module):
         self.rasterizer.set_sigma(sigma)
 
     def reconstruct(self, images):
-        vertices, faces=self.decoder(self.encoder(images))
+        vertices, faces = self.decoder(self.encoder(images))
         return vertices, faces
 
     def render_multiview(self, image_a, image_b, viewpoint_a, viewpoint_b):
         # [Ia, Ib]
-        images=torch.cat((image_a, image_b), dim = 0)
+        images = torch.cat((image_a, image_b), dim=0)
         # [Va, Va, Vb, Vb], set viewpoints
-        viewpoints=torch.cat((viewpoint_a, viewpoint_a, viewpoint_b, viewpoint_b), dim = 0)
+        viewpoints = torch.cat((viewpoint_a, viewpoint_a, viewpoint_b, viewpoint_b), dim=0)
         self.transform.set_eyes(viewpoints)
 
-        vertices, faces=self.reconstruct(images)
-        laplacian_loss=self.laplacian_loss(vertices)
-        flatten_loss=self.flatten_loss(vertices)
+        vertices, faces = self.reconstruct(images)
+        laplacian_loss = self.laplacian_loss(vertices)
+        flatten_loss = self.flatten_loss(vertices)
 
         # [Ma, Mb, Ma, Mb]
-        vertices=torch.cat((vertices, vertices), dim = 0)
-        faces=torch.cat((faces, faces), dim = 0)
+        vertices = torch.cat((vertices, vertices), dim=0)
+        faces = torch.cat((faces, faces), dim=0)
 
         # [Raa, Rba, Rab, Rbb], render for cross-view consistency
-        mesh=sr.Mesh(vertices, faces)
-        mesh=self.lighting(mesh)
-        mesh=self.transform(mesh)
-        silhouettes=self.rasterizer(mesh)
-        class_predictions=self.mvcnn(silhouettes)
+        mesh = sr.Mesh(vertices, faces)
+        mesh = self.lighting(mesh)
+        mesh = self.transform(mesh)
+        silhouettes = self.rasterizer(mesh)
+        render_images = silhouettes.chunk(4, dim=0)
 
-        return silhouettes.chunk(4, dim = 0), laplacian_loss, flatten_loss, class_predictions
+        # only taking first three channels as the 4th channel is a mask
+        class_predictions = self.mvcnn(silhouettes[:, :3, :, :])
+
+        return render_images, laplacian_loss, flatten_loss, class_predictions
 
     def evaluate_iou(self, images, voxels):
-        vertices, faces=self.reconstruct(images)
+        vertices, faces = self.reconstruct(images)
 
-        faces_=srf.face_vertices(vertices, faces).data
-        faces_norm=faces_ * 1. * (32. - 1) / 32. + 0.5
-        voxels_predict=srf.voxelization(faces_norm, 32, False).cpu().numpy()
-        voxels_predict=voxels_predict.transpose(0, 2, 1, 3)[:, :, :, ::-1]
-        iou=(voxels * voxels_predict).sum((1, 2, 3)) / (0 < (voxels + voxels_predict)).sum((1, 2, 3))
+        faces_ = srf.face_vertices(vertices, faces).data
+        faces_norm = faces_ * 1. * (32. - 1) / 32. + 0.5
+        voxels_predict = srf.voxelization(faces_norm, 32, False).cpu().numpy()
+        voxels_predict = voxels_predict.transpose(0, 2, 1, 3)[:, :, :, ::-1]
+        iou = (voxels * voxels_predict).sum((1, 2, 3)) / (0 < (voxels + voxels_predict)).sum((1, 2, 3))
         return iou, vertices, faces
 
-    def forward(self, images = None, viewpoints = None, voxels = None, task = 'train'):
+    def forward(self, images=None, viewpoints=None, voxels=None, task='train'):
         if task == 'train':
-            return self.render_multiview(images[0], images[1], viewpoints[0], viewpoints[1], labels)
+            return self.render_multiview(images[0], images[1], viewpoints[0], viewpoints[1])
         elif task == 'test':
             return self.evaluate_iou(images, voxels)
 
-    def ewc_loss(self, cuda = False):
+    def ewc_loss(self, cuda=False):
         try:
-            losses=[]
+            losses = []
             for n, p in self.named_parameters():
                 # retrieve the consolidated mean and fisher information.
-                n=n.replace('.', '__')
-                mean=torch.tensor(getattr(self, '{}_mean'.format(n)))
-                fisher=torch.tensor(getattr(self, '{}_fisher'.format(n)))
+                n = n.replace('.', '__')
+                mean = torch.tensor(getattr(self, '{}_mean'.format(n)))
+                fisher = torch.tensor(getattr(self, '{}_fisher'.format(n)))
                 # calculate a ewc loss. (assumes the parameter's prior as
                 # gaussian distribution with the estimated mean and the
                 # estimated cramer-rao lower bound variance, which is
