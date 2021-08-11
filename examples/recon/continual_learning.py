@@ -60,6 +60,9 @@ def train(dataset_train, model, optimizer, directory_output, image_output, args)
     data_time = AverageMeter()
     losses = AverageMeter()
 
+    # loss function
+    loss_fn = nn.CrossEntropy()
+
     for i in range(START_ITERATION, args.num_iterations + 1):
         # adjust learning rate and sigma_val (decay after 150k iter)
         lr = adjust_learning_rate(
@@ -74,10 +77,13 @@ def train(dataset_train, model, optimizer, directory_output, image_output, args)
         viewpoints_b = viewpoints_b.cuda()
 
         # soft render images
-        render_images, laplacian_loss, flatten_loss = model([images_a, images_b],
-                                                            [viewpoints_a,
-                                                                viewpoints_b], labels
-                                                            task='train')
+        render_images, laplacian_loss, flatten_loss, class_predictions = model([images_a, images_b],
+                                                                               [viewpoints_a,
+                                                                                viewpoints_b],
+                                                                               task='train')
+
+        # compute classification lsos
+        ce_loss = loss_fn(class_predictions, labels)
         laplacian_loss = laplacian_loss.mean()
         flatten_loss = flatten_loss.mean()
         ewc_loss = model.ewc_loss(cuda=True)
@@ -85,7 +91,7 @@ def train(dataset_train, model, optimizer, directory_output, image_output, args)
         # compute loss
         loss = multiview_iou_loss(render_images, images_a, images_b) + \
             args.lambda_laplacian * laplacian_loss + \
-            args.lambda_flatten * flatten_loss + ewc_loss
+            args.lambda_flatten * flatten_loss + ewc_loss + ce_loss
         losses.update(loss.data.item(), images_a.size(0))
 
         # compute gradient and optimize
@@ -265,9 +271,7 @@ if __name__ == "__main__":
     class_ids = args.class_ids.split(',')
 
     # exclude one class to make 4 sets of 3 classes
-    class_ids.pop(0)build
-
-    class_ids.pop(1)
+    class_ids.pop()
 
     # TODO: set an argument for the number of classes in
     train_ids = val_ids = [class_ids.pop(), class_ids.pop(), class_ids.pop()]
