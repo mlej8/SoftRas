@@ -2,4 +2,4 @@
 
 CUDA_VISIBLE_DEVICES=0
 
-python examples/recon/continual_learning.py -eid cl &
+nohup python examples/recon/continual_learning.py -eid cl > continual_learning.log 2>&1 &

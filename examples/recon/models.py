@@ -105,7 +105,6 @@ class MVCNN(nn.Module):
         # resize the images
         images = self.transform(images)
 
-        # NOTE: validate that original paper concats all the views together as follows.
         output = self.feature_extractor(images)
         output = output.view(images.shape[0]//self.num_views, self.num_views,
                              output.shape[-3], output.shape[-2], output.shape[-1])
@@ -141,7 +140,7 @@ class Model(nn.Module):
         self.mvcnn = MVCNN(num_classes, num_views, pretrained)
 
     def model_param(self):
-        return list(self.encoder.parameters()) + list(self.decoder.parameters())
+        return list(self.encoder.parameters()) + list(self.decoder.parameters()) + list(self.mvcnn.parameters())
 
     def set_sigma(self, sigma):
         self.rasterizer.set_sigma(sigma)
@@ -172,20 +171,30 @@ class Model(nn.Module):
         silhouettes = self.rasterizer(mesh)
         render_images = silhouettes.chunk(4, dim=0)
 
-        # only taking first three channels as the 4th channel is a mask
-        class_predictions = self.mvcnn(silhouettes[:, :3, :, :])
-
-        return render_images, laplacian_loss, flatten_loss, class_predictions
+        return render_images, laplacian_loss, flatten_loss, silhouettes
 
     def evaluate_iou(self, images, voxels):
         vertices, faces = self.reconstruct(images)
 
+        # computing IOU
         faces_ = srf.face_vertices(vertices, faces).data
         faces_norm = faces_ * 1. * (32. - 1) / 32. + 0.5
         voxels_predict = srf.voxelization(faces_norm, 32, False).cpu().numpy()
         voxels_predict = voxels_predict.transpose(0, 2, 1, 3)[:, :, :, ::-1]
         iou = (voxels * voxels_predict).sum((1, 2, 3)) / (0 < (voxels + voxels_predict)).sum((1, 2, 3))
-        return iou, vertices, faces
+
+        # render using reconstructed vertices and faces
+        # [Ma, Mb, Ma, Mb]
+        v = torch.cat((vertices, vertices), dim=0)
+        f = torch.cat((faces, faces), dim=0)
+
+        # [Raa, Rba, Rab, Rbb], render for cross-view consistency
+        mesh = sr.Mesh(v, f)
+        mesh = self.lighting(mesh)
+        mesh = self.transform(mesh)
+        silhouettes = self.rasterizer(mesh)
+
+        return iou, vertices, faces, silhouettes
 
     def forward(self, images=None, viewpoints=None, voxels=None, task='train'):
         if task == 'train':

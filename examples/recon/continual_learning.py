@@ -22,6 +22,7 @@ BATCH_SIZE = 64
 LEARNING_RATE = 1e-4
 LR_TYPE = 'step'
 NUM_ITERATIONS = 250000
+NUM_ITERATIONS_CLASSIFIER = 50000
 
 LAMBDA_LAPLACIAN = 5e-3
 LAMBDA_FLATTEN = 5e-4
@@ -40,30 +41,14 @@ START_ITERATION = 0
 
 RESUME_PATH = ''
 
-date_time = datetime.now().strftime("%Y-%m-%d-%H-%M")
-os.makedirs("logs", exist_ok=True)
-log_filename = "logs/continual-learning-{}.log".format(date_time)
 
-# create the log file if it does not exist
-if not os.path.isfile(log_filename):
-    open(log_filename, "w").close()
-
-logging.basicConfig(filename=log_filename,
-                    level=logging.INFO,
-                    format="%(asctime)s %(name)s %(levelname)s %(message)s")
-logger = logging.getLogger(__name__)
-
-
-def train(dataset_train, model, optimizer, directory_output, image_output, args):
+def train(dataset_train, model, optimizer, directory_output, image_output, start_iter, args):
     end = time.time()
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
 
-    # loss function
-    classification_loss_fn = torch.nn.CrossEntropyLoss()
-
-    for i in range(START_ITERATION, args.num_iterations + 1):
+    for i in range(start_iter, args.num_iterations + 1):
         # adjust learning rate and sigma_val (decay after 150k iter)
         lr = adjust_learning_rate(
             [optimizer], args.learning_rate, i, method=args.lr_type)
@@ -74,13 +59,12 @@ def train(dataset_train, model, optimizer, directory_output, image_output, args)
             tensor.to(args.device) for tensor in dataset_train.get_random_batch(args.batch_size)]
 
         # soft render images
-        render_images, laplacian_loss, flatten_loss, class_predictions = model(images=[images_a, images_b],
-                                                                               viewpoints=[viewpoints_a,
-                                                                                           viewpoints_b],
-                                                                               task='train')
-
+        render_images, laplacian_loss, flatten_loss, _ = model(images=[images_a, images_b],
+                                                               viewpoints=[viewpoints_a,
+                                                                           viewpoints_b],
+                                                               task='train')
+        # TODO inspect render images
         # compute classification lsos
-        ce_loss = classification_loss_fn(class_predictions, labels)
         laplacian_loss = laplacian_loss.mean()
         flatten_loss = flatten_loss.mean()
         # ewc_loss = model.ewc_loss(cuda=True)
@@ -88,7 +72,8 @@ def train(dataset_train, model, optimizer, directory_output, image_output, args)
         # compute loss
         loss = multiview_iou_loss(render_images, images_a, images_b) + \
             args.lambda_laplacian * laplacian_loss + \
-            args.lambda_flatten * flatten_loss + ce_loss  # + ewc_loss
+            args.lambda_flatten * flatten_loss  # + ewc_loss
+
         losses.update(loss.data.item(), images_a.size(0))
 
         # compute gradient and optimize
@@ -102,7 +87,7 @@ def train(dataset_train, model, optimizer, directory_output, image_output, args)
         # save checkpoint
         if i % args.save_freq == 0:
             model_path = os.path.join(
-                directory_output, 'checkpoint_%07d.pth.tar' % i)
+                directory_output, 'checkpoint_%07d.pkl' % i)
             torch.save({
                 'model': model.state_dict(),
                 'optimizer': optimizer.state_dict(),
@@ -120,15 +105,55 @@ def train(dataset_train, model, optimizer, directory_output, image_output, args)
             imageio.imsave(os.path.join(
                 image_output, '%07d_input.png' % i), img_cvt(images_a[0]))
 
-        # print
         if i % args.print_freq == 0:
-            logger.info('Iter: [{0}/{1}]\t'
-                        'Time {batch_time.val:.3f}\t'
-                        'Loss {loss.val:.3f}\t'
-                        'lr {lr:.6f}\t'
-                        'sv {sv:.6f}\t'.format(i, args.num_iterations,
-                                               batch_time=batch_time, loss=losses,
-                                               lr=lr, sv=model.rasterizer.sigma_val))
+            log_str = 'Iter: [{0}/{1}]\tTime {batch_time.val:.3f}\tLoss {loss.val:.3f}\tlr {lr:.6f}\tsv {sv:.6f}\t'.format(i, args.num_iterations,
+                                                                                                                           batch_time=batch_time, loss=losses, lr=lr, sv=model.rasterizer.sigma_val)
+            logger.info(log_str)
+
+    # 2nd traning phase which focus on training the 3D shape classifier
+    # loss function
+    classification_loss_fn = torch.nn.CrossEntropyLoss()
+
+    for i in range(1, args.num_iterations_classifier + 1):
+        with torch.no_grad():
+            # load images from multi-view
+            images_a, images_b, viewpoints_a, viewpoints_b, labels = [
+                tensor.to(args.device) for tensor in dataset_train.get_random_batch(args.batch_size)]
+
+            # soft render images
+            _, _, _, silhouettes = model(images=[images_a, images_b],
+                                         viewpoints=[viewpoints_a,
+                                                     viewpoints_b],
+                                         task='train')
+
+        # compute classification loss
+        rendered_images = silhouettes.detach().clone()
+        rendered_images.requires_grad = True
+
+        # only taking first three channels as the 4th channel is a mask
+        class_predictions = model.mvcnn(rendered_images[:, :3, :, :])
+
+        # compute cross entropy loss
+        ce_loss = classification_loss_fn(class_predictions, labels)
+
+        # accuracy
+        _max_values, max_indices = torch.max(class_predictions, dim=1)
+        batch_acc = torch.sum(max_indices == labels) / args.batch_size
+
+        # ewc_loss = model.ewc_loss(cuda=True)
+
+        # compute gradient and optimize
+        optimizer.zero_grad()
+        ce_loss.backward()
+        optimizer.step()
+
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+        if i % args.print_freq == 0:
+            log_str = 'Iter: [{0}/{1}]\tTime {batch_time.val:.3f}\tCE Loss {ce_loss:.3f}\tAccuracy {acc:.3f}'.format(i, args.num_iterations_classifier,
+                                                                                                                     batch_time=batch_time, ce_loss=ce_loss.item(), acc=batch_acc.item())
+            logger.info(log_str)
 
 
 def test(dataset_val, model, directory_mesh):
@@ -146,14 +171,31 @@ def test(dataset_val, model, directory_mesh):
         directory_mesh_cls = os.path.join(directory_mesh, class_id)
         os.makedirs(directory_mesh_cls, exist_ok=True)
         iou = 0
+        acc = []
+        ce_losses = []
 
         for i, (im, vx) in enumerate(dataset_val.get_all_batches_for_evaluation(args.batch_size, class_id)):
             images = torch.autograd.Variable(im).to(device)
             voxels = vx.numpy()
 
-            batch_iou, vertices, faces = model(
-                images, voxels=voxels, task='test')
-            iou += batch_iou.sum()
+            with torch.no_grad():
+                batch_iou, vertices, faces, silhouettes = model(
+                    images, voxels=voxels, task='test')
+                iou += batch_iou.sum()
+
+                # only taking first three channels as the 4th channel is a mask
+                class_predictions = model.mvcnn(silhouettes[:, :3, :, :])
+
+            labels = torch.empty(class_predictions.shape[0]).fill_(dataset_val.class_ids_labels.get(class_id))
+
+            # compute cross entropy loss
+            ce_loss = classification_loss_fn(class_predictions, labels)
+
+            # accuracy
+            _max_values, max_indices = torch.max(class_predictions)
+            batch_acc = torch.sum(max_indices == labels) / args.batch_size
+            acc.append(batch_acc.item())
+            ce_losses.append(ce_loss.item())
 
             batch_time.update(time.time() - end)
             end = time.time()
@@ -172,15 +214,17 @@ def test(dataset_val, model, directory_mesh):
             # print loss
             if i % args.print_freq == 0:
                 logger.info('Iter: [{0}/{1}]\t'
-                            'Time {batch_time.val:.3f}\t'
-                            'IoU {2:.3f}\t'.format(i, ((dataset_val.num_data[class_id] * 24) // args.batch_size),
-                                                   batch_iou.mean(),
-                                                   batch_time=batch_time))
+                            'Time: {batch_time.val:.3f}\t'
+                            'IoU: {2:.3f}\tCE Loss: {ce_loss:.3f}\tBatch accuracy: {batch_acc:.3f}'.format(i, ((dataset_val.num_data[class_id] * 24) // args.batch_size),
+                                                                                                           batch_iou.mean(),
+                                                                                                           batch_time=batch_time, ce_loss=ce_loss.item(), batch_acc=batch_acc.item()))
 
         iou_cls = iou / 24. / dataset_val.num_data[class_id] * 100
         iou_all.append(iou_cls)
         logger.info('=================================')
         logger.info('Mean IoU: %.3f for class %s' % (iou_cls, class_name))
+        logger.info('Mean Accuracy: %.3f for class %s' % (sum(batch_acc)/len(batch_acc), class_name))
+        logger.info('Mean CE Loss: %.3f for class %s' % (sum(ce_losses)/len(ce_losses), class_name))
         logger.info('\n')
 
     logger.info('=================================')
@@ -228,6 +272,8 @@ if __name__ == "__main__":
 
     parser.add_argument('-lr', '--learning-rate',
                         type=float, default=LEARNING_RATE)
+    parser.add_argument('-lrc', '--learning-rate-classifier',
+                        type=float, default=LEARNING_RATE_CLASSIFIER)
     parser.add_argument('-lrt', '--lr-type', type=str, default=LR_TYPE)
 
     parser.add_argument('-ll', '--lambda-laplacian',
@@ -236,12 +282,14 @@ if __name__ == "__main__":
                         type=float, default=LAMBDA_FLATTEN)
     parser.add_argument('-ni', '--num-iterations',
                         type=int, default=NUM_ITERATIONS)
+    parser.add_argument('-nic', '--num-iterations-classifier',
+                        type=int, default=NUM_ITERATIONS_CLASSIFIER)
     parser.add_argument('-pf', '--print-freq', type=int, default=PRINT_FREQ)
     parser.add_argument('-df', '--demo-freq', type=int, default=DEMO_FREQ)
     parser.add_argument('-sf', '--save-freq', type=int, default=SAVE_FREQ)
     parser.add_argument('-s', '--seed', type=int, default=RANDOM_SEED)
     parser.add_argument('--fisher_estimation_sample_size', type=int, default=1024)
-    parser.add_argument('--k', type=int, default=3)
+    parser.add_argument('--k', type=int, default=3, help="Number of classes for each task in continual learning.")
 
     args = parser.parse_args()
     args.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -251,11 +299,7 @@ if __name__ == "__main__":
     torch.cuda.manual_seed_all(args.seed)
     np.random.seed(args.seed)
 
-    # setup model & optimizer
-    model = models.Model('data/obj/sphere/sphere_642.obj', args=args, num_classes=args.k)
-    model = model.to(args.device)
-
-    optimizer = torch.optim.Adam(model.model_param(), args.learning_rate)
+    date_time = datetime.now().strftime("%Y-%m-%d-%h-%M")
 
     # train output directories
     directory_output = os.path.join(args.model_directory, args.experiment_id, date_time)
@@ -269,13 +313,48 @@ if __name__ == "__main__":
     num_set = len(datasets.class_ids_map) // args.k
     class_ids = args.class_ids.split(',')
 
+    logging.basicConfig(filename=os.path.join(directory_output, "continual-learning.log"),
+                        level=logging.INFO,
+                        format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    logger = logging.getLogger(__name__)
+
     # exclude one class to make 4 sets of 3 classes
     class_ids.pop()
 
-    # TODO: set an argument for the number of classes in
     train_ids = val_ids = [class_ids.pop() for i in range(args.k)]
+    state_dict = None
+
+    # holds the initial weights of the classification head
+    initial_output_weights = None
+
+    number_task = 1
 
     while num_set:
+
+        # setup model & optimizer
+        model = models.Model('data/obj/sphere/sphere_642.obj', args=args, num_classes=len(val_ids))
+        model = model.to(args.device)
+
+        start_iter = START_ITERATION
+
+        if initial_output_weights is None:
+            initial_output_weights = (model.mvcnn.classifier[6].weight.detach().clone(),
+                                      model.mvcnn.classifier[6].bias.detach().clone())
+        if state_dict:
+            state_dict["mvcnn.classifier.6.weight"] = torch.cat(
+                [state_dict["mvcnn.classifier.6.weight"], initial_output_weights[0]], dim=0)
+            state_dict["mvcnn.classifier.6.bias"] = torch.cat(
+                [state_dict["mvcnn.classifier.6.bias"], initial_output_weights[1]], dim=0)
+            model.load_state_dict(state_dict)
+        optimizer = torch.optim.Adam(model.model_param(), args.learning_rate)
+
+        if args.resume_path and number_task == 1:
+            state_dicts = torch.load(args.resume_path)
+            model.load_state_dict(state_dicts['model'])
+            optimizer.load_state_dict(state_dicts['optimizer'])
+            start_iter = int(os.path.split(args.resume_path)[1][11:].split('.')[0]) + 1
+            logger.info('Resuming from %s iteration for task %d' % (start_iter, number_task))
+
         # display current classes that we are training/validating on
         logger.info(
             f"Training on {train_ids} which correspond to {[datasets.class_ids_map.get(train_id) for train_id in train_ids]}")
@@ -286,7 +365,7 @@ if __name__ == "__main__":
         dataset_train = datasets.ShapeNet(
             args.dataset_directory, train_ids, 'train')
         train(dataset_train=dataset_train, model=model,
-              optimizer=optimizer, directory_output=directory_output, image_output=image_output, args=args)
+              optimizer=optimizer, directory_output=directory_output, image_output=image_output, start_iter=start_iter, args=args)
         # model.consolidate(model.estimate_fisher(
         #     dataset_train, args.fisher_estimation_sample_size
         # ))
@@ -302,3 +381,8 @@ if __name__ == "__main__":
         if num_set:
             train_ids = [class_ids.pop() for i in range(args.k)]
             val_ids.extend(train_ids)
+
+        # store model weights
+        state_dict = model.state_dict()
+        torch.save(state_dict, os.path.join(directory_output, "{}.pt".format(str(number_task))))
+        number_task += 1

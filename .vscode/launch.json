@@ -5,6 +5,19 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "continual_learning.py",
+            "type": "python",
+            "args": [
+                "-eid",
+                "cl",
+                "--resume-path",
+                "/home/mlej8/projects/SoftRas/data/results/models/cl/2021-08-19-Aug-21/checkpoint_0250000.pkl"
+            ],
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal"
+        },
+        {
             "name": "test.py",
             "type": "python",
             "request": "launch",
@@ -23,17 +36,6 @@
             "args": [
                 "-eid",
                 "recon"
-            ],
-            "request": "launch",
-            "program": "${file}",
-            "console": "integratedTerminal"
-        },
-        {
-            "name": "continual_learning.py",
-            "type": "python",
-            "args": [
-                "-eid",
-                "cl"
             ],
             "request": "launch",
             "program": "${file}",
