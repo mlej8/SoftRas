@@ -272,8 +272,6 @@ if __name__ == "__main__":
 
     parser.add_argument('-lr', '--learning-rate',
                         type=float, default=LEARNING_RATE)
-    parser.add_argument('-lrc', '--learning-rate-classifier',
-                        type=float, default=LEARNING_RATE_CLASSIFIER)
     parser.add_argument('-lrt', '--lr-type', type=str, default=LR_TYPE)
 
     parser.add_argument('-ll', '--lambda-laplacian',
@@ -299,7 +297,7 @@ if __name__ == "__main__":
     torch.cuda.manual_seed_all(args.seed)
     np.random.seed(args.seed)
 
-    date_time = datetime.now().strftime("%Y-%m-%d-%h-%M")
+    date_time = datetime.now().strftime("%Y-%m-%d-%H-%M")
 
     # train output directories
     directory_output = os.path.join(args.model_directory, args.experiment_id, date_time)
