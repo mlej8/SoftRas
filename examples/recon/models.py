@@ -116,7 +116,7 @@ class MVCNN(nn.Module):
 
 
 class Model(nn.Module):
-    def __init__(self, filename_obj, args, num_classes, num_views=4, lamda=40, pretrained=True):
+    def __init__(self, filename_obj, args, num_classes, num_views=24, lamda=40, pretrained=True):
         super(Model, self).__init__()
 
         # lambda for ewc loss which sets how important the old task is compared with the new one
@@ -139,8 +139,8 @@ class Model(nn.Module):
         # classifier
         self.mvcnn = MVCNN(num_classes, num_views, pretrained)
 
-    def model_param(self):
-        return list(self.encoder.parameters()) + list(self.decoder.parameters()) + list(self.mvcnn.parameters())
+    def model_param(self, learning_rate_classifier):
+        return [{"params":list(self.encoder.parameters()) + list(self.decoder.parameters())},{"params":list(self.mvcnn.parameters()), 'lr': learning_rate_classifier}]
 
     def set_sigma(self, sigma):
         self.rasterizer.set_sigma(sigma)
@@ -151,9 +151,9 @@ class Model(nn.Module):
 
     def render_multiview(self, image_a, image_b, viewpoint_a, viewpoint_b):
         # [Ia, Ib]
-        images = torch.cat((image_a, image_b), dim=0)
-        # [Va, Va, Vb, Vb], set viewpoints
-        viewpoints = torch.cat((viewpoint_a, viewpoint_a, viewpoint_b, viewpoint_b), dim=0)
+        images = torch.cat((image_a, image_b), dim=0) # torch.Size([64, 4, 64, 64])
+        # [Va, Va, Vb, Vb], set viewpoints 
+        viewpoints = torch.cat((viewpoint_a, viewpoint_a, viewpoint_b, viewpoint_b), dim=0) #torch.Size([128, 3])
         self.transform.set_eyes(viewpoints)
 
         vertices, faces = self.reconstruct(images)
@@ -161,7 +161,7 @@ class Model(nn.Module):
         flatten_loss = self.flatten_loss(vertices)
 
         # [Ma, Mb, Ma, Mb]
-        vertices = torch.cat((vertices, vertices), dim=0)
+        vertices = torch.cat((vertices, vertices), dim=0) # torch.Size([128, 642, 3])
         faces = torch.cat((faces, faces), dim=0)
 
         # [Raa, Rba, Rab, Rbb], render for cross-view consistency
@@ -175,7 +175,7 @@ class Model(nn.Module):
 
     def evaluate_iou(self, images, voxels):
         vertices, faces = self.reconstruct(images)
-
+        
         # computing IOU
         faces_ = srf.face_vertices(vertices, faces).data
         faces_norm = faces_ * 1. * (32. - 1) / 32. + 0.5
@@ -183,24 +183,35 @@ class Model(nn.Module):
         voxels_predict = voxels_predict.transpose(0, 2, 1, 3)[:, :, :, ::-1]
         iou = (voxels * voxels_predict).sum((1, 2, 3)) / (0 < (voxels + voxels_predict)).sum((1, 2, 3))
 
-        # render using reconstructed vertices and faces
-        # [Ma, Mb, Ma, Mb]
-        v = torch.cat((vertices, vertices), dim=0)
-        f = torch.cat((faces, faces), dim=0)
-
-        # [Raa, Rba, Rab, Rbb], render for cross-view consistency
-        mesh = sr.Mesh(v, f)
-        mesh = self.lighting(mesh)
-        mesh = self.transform(mesh)
-        silhouettes = self.rasterizer(mesh)
-
-        return iou, vertices, faces, silhouettes
+        return iou, vertices, faces
 
     def forward(self, images=None, viewpoints=None, voxels=None, task='train'):
         if task == 'train':
             return self.render_multiview(images[0], images[1], viewpoints[0], viewpoints[1])
+        elif task == "classify":
+            assert images is not None, "ground truth images must be provided for classification."
+            assert viewpoints is not None, "viewpoints must be provided."
+            
+            self.transform.set_eyes(viewpoints) 
+            vertices, faces = self.reconstruct(images)
+            mesh = sr.Mesh(vertices, faces)
+            mesh = self.lighting(mesh)
+            mesh = self.transform(mesh)
+            silhouettes = self.rasterizer(mesh)
+            return silhouettes
+
         elif task == 'test':
-            return self.evaluate_iou(images, voxels)
+            assert images is not None, "ground truth images must be provided for classification."
+            assert viewpoints is not None, "viewpoints must be provided."
+            assert voxels is not None, "voxels must be provided for evaluation."
+            iou, vertices, faces = self.evaluate_iou(images, voxels)
+            
+            self.transform.set_eyes(viewpoints) 
+            mesh = sr.Mesh(vertices, faces)
+            mesh = self.lighting(mesh)
+            mesh = self.transform(mesh)
+            silhouettes = self.rasterizer(mesh)
+            return iou, vertices, faces, silhouettes
 
     def ewc_loss(self, cuda=False):
         try:

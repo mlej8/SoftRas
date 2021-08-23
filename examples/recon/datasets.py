@@ -24,36 +24,53 @@ class_ids_map = {
 
 
 class ShapeNet(object):
-    def __init__(self, directory=None, class_ids=None, set_name=None):
+    def __init__(self, directory=None, class_ids=None, set_name=None, num_views = 24):
         self.class_ids = class_ids
         self.class_ids_labels = {class_id: i for i, class_id in enumerate(class_ids)}
         self.set_name = set_name
         self.elevation = 30.
         self.distance = 2.732
+        self.num_views = num_views 
 
         self.class_ids_map = class_ids_map
 
-        images = []
-        voxels = []
+        self.images = []
+        self.voxels = []
+        self.labels = []
+
+        # storing number of samples per class
         self.num_data = {}
+
+        # storing starting position of each class
         self.pos = {}
+
         count = 0
         loop = tqdm.tqdm(self.class_ids)
         loop.set_description('Loading dataset')
         for class_id in loop:
-            images.append(list(np.load(
+            self.images.append(list(np.load(
                 os.path.join(directory, '%s_%s_images.npz' % (class_id, set_name))).items())[0][1])
-            voxels.append(list(np.load(
+            self.voxels.append(list(np.load(
                 os.path.join(directory, '%s_%s_voxels.npz' % (class_id, set_name))).items())[0][1])
-            self.num_data[class_id] = images[-1].shape[0]
+            self.num_data[class_id] = self.images[-1].shape[0]
             self.pos[class_id] = count
             count += self.num_data[class_id]
-        images = np.concatenate(images, axis=0).reshape((-1, 4, 64, 64))
-        images = np.ascontiguousarray(images)
-        self.images = images
-        self.voxels = np.ascontiguousarray(np.concatenate(voxels, axis=0))
-        del images
-        del voxels
+            self.labels += [class_id] * self.images[-1].shape[0]
+
+        self.images = np.ascontiguousarray(np.concatenate(self.images, axis=0).reshape((-1, 4, 64, 64)))
+        self.voxels = np.ascontiguousarray(np.concatenate(self.voxels, axis=0))
+    
+    def __len__(self):
+        # each object has 24 images (perspectives)
+        return len(self.labels)
+    
+    def __getitem__(self, idx):
+        viewpoint_ids = np.arange(self.num_views)
+        distances = torch.ones(self.num_views).float() * self.distance
+        elevations = torch.ones(self.num_views).float() * self.elevation
+        viewpoints = srf.get_points_from_angles(distances, elevations,
+                                                    -torch.from_numpy(viewpoint_ids).float() * 15)
+        return torch.from_numpy(self.images[idx*self.num_views:idx*self.num_views + self.num_views].astype('float32') / 255.), viewpoints, torch.tensor(self.class_ids_labels.get(self.labels[idx]), dtype=torch.long)
 
     @property
     def class_ids_pair(self):
@@ -65,10 +82,8 @@ class ShapeNet(object):
         data_ids_b = np.zeros(batch_size, 'int32')
         viewpoint_ids_a = torch.zeros(batch_size)
         viewpoint_ids_b = torch.zeros(batch_size)
-        class_labels = []
         for i in range(batch_size):
             class_id = np.random.choice(self.class_ids)
-            class_labels.append(self.class_ids_labels.get(class_id))
             object_id = np.random.randint(0, self.num_data[class_id])
 
             viewpoint_id_a = np.random.randint(0, 24)
@@ -89,7 +104,7 @@ class ShapeNet(object):
         viewpoints_a = srf.get_points_from_angles(distances, elevations_a, -viewpoint_ids_a * 15)
         viewpoints_b = srf.get_points_from_angles(distances, elevations_b, -viewpoint_ids_b * 15)
 
-        return images_a, images_b, viewpoints_a, viewpoints_b, torch.tensor(class_labels, dtype=torch.long)
+        return images_a, images_b, viewpoints_a, viewpoints_b
 
     def get_all_batches_for_evaluation(self, batch_size, class_id):
         data_ids = np.arange(self.num_data[class_id]) + self.pos[class_id]
@@ -101,9 +116,9 @@ class ShapeNet(object):
         viewpoints_all = srf.get_points_from_angles(distances, elevations,
                                                     -torch.from_numpy(viewpoint_ids).float() * 15)
 
-        for i in range((data_ids.size - 1) // batch_size + 1):
+        for i in range((data_ids.size // (batch_size * 24))+ 1):
             images = torch.from_numpy(
-                self.images[data_ids[i * batch_size:(i + 1) * batch_size]].astype('float32') / 255.)
+                self.images[data_ids[i * batch_size * 24:(i + 1) * batch_size * 24]].astype('float32') / 255.)
             voxels = torch.from_numpy(
-                self.voxels[data_ids[i * batch_size:(i + 1) * batch_size] // 24].astype('float32'))
-            yield images, voxels
+                self.voxels[data_ids[i * batch_size * 24:(i + 1) * batch_size * 24] // 24].astype('float32'))
+            yield images, voxels, viewpoints_all[i * batch_size * 24:(i + 1) * batch_size * 24]

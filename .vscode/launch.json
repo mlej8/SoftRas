@@ -11,11 +11,12 @@
                 "-eid",
                 "cl",
                 "--resume-path",
-                "/home/mlej8/projects/SoftRas/data/results/models/cl/2021-08-19-Aug-21/checkpoint_0250000.pkl"
+                "/home/mlej8/projects/SoftRas/data/results/models/cl/2021-08-19-22-21/checkpoint_0250000.pkl"
             ],
             "request": "launch",
             "program": "${file}",
-            "console": "integratedTerminal"
+            "console": "integratedTerminal",
+            // "justMyCode": false 
         },
         {
             "name": "test.py",
