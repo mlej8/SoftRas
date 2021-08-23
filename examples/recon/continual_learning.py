@@ -21,10 +21,10 @@ CLASS_IDS_ALL = (
     '03691459,04090263,04256520,04379243,04401088,04530566')
 
 NUM_WORKERS = 24
-BATCH_SIZE = 16
+BATCH_SIZE = 64
 BATCH_SIZE_CLASSIFIER = 16
 LEARNING_RATE = 1e-4
-LEARNING_RATE_CLASSIFIER = 5e-4
+LEARNING_RATE_CLASSIFIER = 1e-3
 LR_TYPE = 'step'
 NUM_ITERATIONS = 250000
 NUM_EPOCHS_CLASSIFIER = 10
@@ -185,7 +185,7 @@ def validate(dataset_val, model, directory_mesh, args):
         acc = []
         ce_losses = []
 
-        for i, (im, vx, viewpoints) in enumerate(dataset_val.get_all_batches_for_evaluation(args.batch_size, class_id)):
+        for i, (im, vx, viewpoints) in enumerate(dataset_val.get_all_batches_for_evaluation(args.batch_size_classifier, class_id)):
             images = torch.autograd.Variable(im).to(args.device)
             voxels = vx.numpy()
 
@@ -245,8 +245,8 @@ def adjust_learning_rate(optimizers, learning_rate, i, method):
         logger.info("no such learing rate type")
 
     for optimizer in optimizers:
-        for param_group in optimizer.param_groups:
-            param_group['lr'] = lr
+        # only decay learning rate for rasterizer
+        optimizer.param_groups[0]['lr'] = lr
     return lr
 
 
@@ -388,5 +388,8 @@ if __name__ == "__main__":
 
         # store model weights
         state_dict = model.state_dict()
-        torch.save(state_dict, os.path.join(directory_output, "{}.pt".format(str(number_task))))
+        torch.save({
+                'model': state_dict,
+                'optimizer': optimizer.state_dict(),
+            }, os.path.join(directory_output, "{}.pt".format(str(number_task))))
         number_task += 1
