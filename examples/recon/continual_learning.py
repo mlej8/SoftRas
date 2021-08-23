@@ -144,7 +144,8 @@ def train(dataset_train, model, optimizer, directory_output, image_output, start
 
             # accuracy
             _max_values, max_indices = torch.max(class_predictions, dim=1)
-            batch_acc = torch.sum(max_indices == labels) / args.batch_size
+            batch_acc = torch.sum(max_indices == labels) / args.batch_size_classifier
+            # TODO solve data imbalance problem undersample vs oversample ?
             # ewc_loss = model.ewc_loss(cuda=True)
 
             accuracies.append(batch_acc.item())
@@ -163,7 +164,6 @@ def train(dataset_train, model, optimizer, directory_output, image_output, start
         epoch_end = time.time()
         log_str = 'Epoch: [{0}/{1}]\tEpoch time: {epoch_time.val:.3f}\tAverage CE Loss: {ce_loss:.3f}\tEpoch accuracy: {acc:.3f}'.format(i, args.num_epochs_classifier,
                                                                                                                     epoch_time=epoch_time, ce_loss=sum(losses)/len(losses), acc=sum(accuracies)/len(accuracies))
-        logger.info(log_str)
         logger.info(log_str)
 
 
@@ -204,7 +204,7 @@ def validate(dataset_val, model, directory_mesh, args):
 
             # accuracy
             _max_values, max_indices = torch.max(class_predictions, dim=1)
-            batch_acc = torch.sum(max_indices == labels) / args.batch_size
+            batch_acc = torch.sum(max_indices == labels) / args.batch_size_classifier
             acc.append(batch_acc.item())
             ce_losses.append(ce_loss.item())
 
@@ -213,7 +213,7 @@ def validate(dataset_val, model, directory_mesh, args):
 
             # save demo images
             for k in range(vertices.size(0)):
-                obj_id = (i * args.batch_size + k)
+                obj_id = (i * args.batch_size_classifier + k)
                 if obj_id % args.save_freq == 0:
                     mesh_path = os.path.join(
                         directory_mesh_cls, '%06d.obj' % obj_id)
