@@ -27,7 +27,7 @@ LEARNING_RATE = 1e-4
 LEARNING_RATE_CLASSIFIER = 5e-5
 LR_TYPE = 'step'
 NUM_ITERATIONS = 250000
-NUM_EPOCHS_CLASSIFIER = 10
+NUM_EPOCHS_CLASSIFIER = 5 # TODO combat overfitting... 
 
 LAMBDA_LAPLACIAN = 5e-3
 LAMBDA_FLATTEN = 5e-4
@@ -393,3 +393,4 @@ if __name__ == "__main__":
                 'optimizer': optimizer.state_dict(),
             }, os.path.join(directory_output, "{}.pt".format(str(number_task))))
         number_task += 1
+        # TODO store checkpoints in different directories...

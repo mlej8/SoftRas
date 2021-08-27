@@ -116,7 +116,7 @@ class ShapeNet(object):
         viewpoints_all = srf.get_points_from_angles(distances, elevations,
                                                     -torch.from_numpy(viewpoint_ids).float() * 15)
 
-        for i in range((data_ids.size // (batch_size * 24))+ 1):
+        for i in range(data_ids.size // (batch_size * 24)):
             images = torch.from_numpy(
                 self.images[data_ids[i * batch_size * 24:(i + 1) * batch_size * 24]].astype('float32') / 255.)
             voxels = torch.from_numpy(
