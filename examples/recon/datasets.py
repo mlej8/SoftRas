@@ -24,15 +24,26 @@ class_ids_map = {
 
 
 class ShapeNet(object):
-    def __init__(self, directory=None, class_ids=None, set_name=None, num_views = 24):
+    def __init__(self, directory=None, class_ids=None, set_name=None, num_views=24):
         self.class_ids = class_ids
-        self.class_ids_labels = {class_id: i for i, class_id in enumerate(class_ids)}
         self.set_name = set_name
         self.elevation = 30.
         self.distance = 2.732
-        self.num_views = num_views 
+        self.num_views = num_views
 
         self.class_ids_map = class_ids_map
+        self.class_ids_labels = {'02691156': 11,
+                                 '02828884': 10,
+                                 '02933112': 9,
+                                 '02958343': 8,
+                                 '03001627': 7,
+                                 '03211117': 6,
+                                 '03636649': 5,
+                                 '03691459': 4,
+                                 '04090263': 3,
+                                 '04256520': 2,
+                                 '04379243': 1,
+                                 '04401088': 0}
 
         self.images = []
         self.voxels = []
@@ -59,17 +70,17 @@ class ShapeNet(object):
 
         self.images = np.ascontiguousarray(np.concatenate(self.images, axis=0).reshape((-1, 4, 64, 64)))
         self.voxels = np.ascontiguousarray(np.concatenate(self.voxels, axis=0))
-    
+
     def __len__(self):
         # each object has 24 images (perspectives)
         return len(self.labels)
-    
+
     def __getitem__(self, idx):
         viewpoint_ids = np.arange(self.num_views)
         distances = torch.ones(self.num_views).float() * self.distance
         elevations = torch.ones(self.num_views).float() * self.elevation
         viewpoints = srf.get_points_from_angles(distances, elevations,
-                                                    -torch.from_numpy(viewpoint_ids).float() * 15)
+                                                -torch.from_numpy(viewpoint_ids).float() * 15)
         return torch.from_numpy(self.images[idx*self.num_views:idx*self.num_views + self.num_views].astype('float32') / 255.), viewpoints, torch.tensor(self.class_ids_labels.get(self.labels[idx]), dtype=torch.long)
 
     @property

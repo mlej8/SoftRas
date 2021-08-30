@@ -330,7 +330,7 @@ if __name__ == "__main__":
     # holds the initial weights of the classification head
     initial_output_weights = None
 
-    number_task = 1
+    task_number = 1
 
     while num_set:
 
@@ -351,12 +351,12 @@ if __name__ == "__main__":
             model.load_state_dict(state_dict)
         optimizer = torch.optim.Adam(model.model_param(args.learning_rate_classifier), args.learning_rate)
 
-        if args.resume_path and number_task == 1:
+        if args.resume_path and task_number == 1:
             state_dicts = torch.load(args.resume_path)
             model.load_state_dict(state_dicts['model'])
             # optimizer.load_state_dict(state_dicts['optimizer'])
             start_iter = int(os.path.split(args.resume_path)[1][11:].split('.')[0]) + 1
-            logger.info('Resuming from %s iteration for task %d' % (start_iter, number_task))
+            logger.info('Resuming from %s iteration for task %d' % (start_iter, task_number))
 
         # display current classes that we are training/validating on
         logger.info(
@@ -368,8 +368,12 @@ if __name__ == "__main__":
         dataset_train = datasets.ShapeNet(
             args.dataset_directory, train_ids, 'train')
         train_dataloader = DataLoader(dataset_train, batch_size=args.batch_size_classifier, shuffle=True, num_workers=args.num_workers)
+        task_directory_output = os.path.join(directory_output, str(task_number))
+        os.makedirs(task_directory_output, exist_ok=True)
+        task_image_output = os.path.join(image_output, str(task_number))
+        os.makedirs(task_image_output, exist_ok=True)
         train(dataset_train=dataset_train, model=model,
-              optimizer=optimizer, directory_output=directory_output, image_output=image_output, start_iter=start_iter, args=args, dataloader=train_dataloader)
+              optimizer=optimizer, directory_output=task_directory_output, image_output=task_image_output, start_iter=start_iter, args=args, dataloader=train_dataloader)
         # model.consolidate(model.estimate_fisher(
         #     dataset_train, args.fisher_estimation_sample_size
         # ))
@@ -379,11 +383,13 @@ if __name__ == "__main__":
 
         model.eval()
         dataset_val = datasets.ShapeNet(args.dataset_directory, val_ids, 'val')
-        validate(dataset_val, model, directory_mesh=directory_mesh, args=args)
+        task_directory_mesh = os.path.join(directory_mesh, str(task_number))
+        os.makedirs(task_directory_mesh, exist_ok=True)
+        validate(dataset_val, model, directory_mesh=task_directory_mesh, args=args)
 
         num_set -= 1
         if num_set:
-            train_ids = [class_ids.pop() for i in range(args.k)]
+            train_ids = [class_ids.pop() for _ in range(args.k)]
             val_ids.extend(train_ids)
 
         # store model weights
@@ -391,6 +397,5 @@ if __name__ == "__main__":
         torch.save({
                 'model': state_dict,
                 'optimizer': optimizer.state_dict(),
-            }, os.path.join(directory_output, "{}.pt".format(str(number_task))))
-        number_task += 1
-        # TODO store checkpoints in different directories...
+            }, os.path.join(directory_output, "{}.pt".format(str(task_number))))
+        task_number += 1
