@@ -4,7 +4,6 @@ import torch.nn.functional as F
 from torch import autograd
 from torch.utils.data import DataLoader
 from torchvision import models, transforms
-
 import soft_renderer as sr
 import soft_renderer.functional as srf
 import math
@@ -140,7 +139,7 @@ class Model(nn.Module):
         self.mvcnn = MVCNN(num_classes, num_views, pretrained)
 
     def model_param(self, learning_rate_classifier):
-        return [{"params":list(self.encoder.parameters()) + list(self.decoder.parameters())},{"params":list(self.mvcnn.parameters()), 'lr': learning_rate_classifier}]
+        return [{"params": list(self.encoder.parameters()) + list(self.decoder.parameters())}, {"params": list(self.mvcnn.parameters()), 'lr': learning_rate_classifier}]
 
     def set_sigma(self, sigma):
         self.rasterizer.set_sigma(sigma)
@@ -151,9 +150,9 @@ class Model(nn.Module):
 
     def render_multiview(self, image_a, image_b, viewpoint_a, viewpoint_b):
         # [Ia, Ib]
-        images = torch.cat((image_a, image_b), dim=0) # torch.Size([64, 4, 64, 64])
-        # [Va, Va, Vb, Vb], set viewpoints 
-        viewpoints = torch.cat((viewpoint_a, viewpoint_a, viewpoint_b, viewpoint_b), dim=0) #torch.Size([128, 3])
+        images = torch.cat((image_a, image_b), dim=0)  # torch.Size([64, 4, 64, 64])
+        # [Va, Va, Vb, Vb], set viewpoints
+        viewpoints = torch.cat((viewpoint_a, viewpoint_a, viewpoint_b, viewpoint_b), dim=0)  # torch.Size([128, 3])
         self.transform.set_eyes(viewpoints)
 
         vertices, faces = self.reconstruct(images)
@@ -161,7 +160,7 @@ class Model(nn.Module):
         flatten_loss = self.flatten_loss(vertices)
 
         # [Ma, Mb, Ma, Mb]
-        vertices = torch.cat((vertices, vertices), dim=0) # torch.Size([128, 642, 3])
+        vertices = torch.cat((vertices, vertices), dim=0)  # torch.Size([128, 642, 3])
         faces = torch.cat((faces, faces), dim=0)
 
         # [Raa, Rba, Rab, Rbb], render for cross-view consistency
@@ -175,7 +174,7 @@ class Model(nn.Module):
 
     def evaluate_iou(self, images, voxels):
         vertices, faces = self.reconstruct(images)
-        
+
         # computing IOU
         faces_ = srf.face_vertices(vertices, faces).data
         faces_norm = faces_ * 1. * (32. - 1) / 32. + 0.5
@@ -191,8 +190,8 @@ class Model(nn.Module):
         elif task == "classify":
             assert images is not None, "ground truth images must be provided for classification."
             assert viewpoints is not None, "viewpoints must be provided."
-            
-            self.transform.set_eyes(viewpoints) 
+
+            self.transform.set_eyes(viewpoints)
             vertices, faces = self.reconstruct(images)
             mesh = sr.Mesh(vertices, faces)
             mesh = self.lighting(mesh)
@@ -205,15 +204,15 @@ class Model(nn.Module):
             assert viewpoints is not None, "viewpoints must be provided."
             assert voxels is not None, "voxels must be provided for evaluation."
             iou, vertices, faces = self.evaluate_iou(images, voxels)
-            
-            self.transform.set_eyes(viewpoints) 
+
+            self.transform.set_eyes(viewpoints)
             mesh = sr.Mesh(vertices, faces)
             mesh = self.lighting(mesh)
             mesh = self.transform(mesh)
             silhouettes = self.rasterizer(mesh)
             return iou, vertices, faces, silhouettes
 
-    def ewc_loss(self, cuda=False):
+    def ewc_loss(self, device):
         try:
             losses = []
             for n, p in self.named_parameters():
@@ -229,35 +228,42 @@ class Model(nn.Module):
             return (self.lamda/2)*sum(losses)
         except AttributeError:
             # ewc loss is 0 if there's no consolidated parameters.
-            return (
-                torch.zeros(1).cuda() if cuda else
-                torch.zeros(1)
-            )
+            return torch.zeros(1).to(device)
 
-    def estimate_fisher(self, dataset, sample_size, batch_size=32):
+    def to_cpu(self, tensors):
+        torch.cuda.empty_cache()
+        cpu_tensors = []
+        for t in tensors:
+            cpu_tensors.append(t.cpu())
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+        return tuple(cpu_tensors)
+
+    def estimate_fisher(self, data_loader, args):
         # sample loglikelihoods from the dataset.
-        data_loader = DataLoader(
-            dataset, batch_size=batch_size,
-            shuffle=True,
-            **({'num_workers': 2, 'pin_memory': True})
-        )
+        loglikelihoods_grads = []
+        for i, data in enumerate(data_loader, 1):
+            print(f"Allocated: {torch.cuda.memory_allocated(0)}B\tReserverd: {torch.cuda.memory_reserved(0)}B\tTotal memory: {torch.cuda.get_device_properties(0).total_memory}B")
+            
+            images, viewpoints, labels = [tensor.to(args.device) for tensor in data]
+            images = images.view(-1, images.shape[-3], images.shape[-2], images.shape[-1]).contiguous()
+            viewpoints = viewpoints.view(-1, viewpoints.shape[-1]).contiguous()
 
-        loglikelihoods = []
-        for x, y in data_loader:
-            x = x.view(batch_size, -1)
-            x = x.cuda() if self._is_on_cuda() else x
-            y = y.cuda() if self._is_on_cuda() else y
-            loglikelihoods.append(
-                F.log_softmax(self(x), dim=1)[range(batch_size), y.data]
-            )
-            if len(loglikelihoods) >= sample_size // batch_size:
+            silhouettes = self(images=images,
+                                viewpoints=viewpoints, task="classify")
+
+            # only taking first three channels as the 4th channel is a mask
+            class_predictions = self.mvcnn(silhouettes[:, :3, :, :])
+            torch.cuda.synchronize()
+            loglikelihoods = F.log_softmax(class_predictions, dim=1)[range(args.batch_size_classifier), labels.data].cpu()
+            loglikelihoods_grads.append(self.to_cpu(autograd.grad(l, self.parameters(), retain_graph=True) for l in loglikelihoods.unbind()))
+            del silhouettes, class_predictions, images, viewpoints, labels, loglikelihoods
+            torch.cuda.empty_cache()
+            if i >= args.fisher_estimation_sample_size // args.batch_size_classifier:
                 break
+                
         # estimate the fisher information of the parameters.
-        loglikelihoods = torch.cat(loglikelihoods).unbind()
-        loglikelihood_grads = zip(*[autograd.grad(
-            l, self.parameters(),
-            retain_graph=(i < len(loglikelihoods))
-        ) for i, l in enumerate(loglikelihoods, 1)])
+        loglikelihood_grads = zip(*loglikelihood_grads)
         loglikelihood_grads = [torch.stack(gs) for gs in loglikelihood_grads]
         fisher_diagonals = [(g ** 2).mean(0) for g in loglikelihood_grads]
         param_names = [
@@ -265,12 +271,11 @@ class Model(nn.Module):
         ]
         return {n: f.detach() for n, f in zip(param_names, fisher_diagonals)}
 
-    def consolidate(self, fisher):
-        for n, p in self.named_parameters():
-            n = n.replace('.', '__')
-            self.register_buffer('{}_mean'.format(n), p.data.clone())
-            self.register_buffer('{}_fisher'
-                                 .format(n), fisher[n].data.clone())
+    def consolidate(self, fisher_matrix):
+        for name, p in self.named_parameters():
+            name = name.replace('.', '__')
+            self.register_buffer(f'{name}_mean', p.data.clone())
+            self.register_buffer(f'{name}_fisher', fisher_matrix[name].data.clone())
 
     def _is_on_cuda(self):
         return next(self.parameters()).is_cuda
