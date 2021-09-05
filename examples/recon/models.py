@@ -212,10 +212,15 @@ class Model(nn.Module):
             silhouettes = self.rasterizer(mesh)
             return iou, vertices, faces, silhouettes
 
-    def ewc_loss(self, device):
+    def ewc_loss(self, device, classifier):
         try:
             losses = []
             for n, p in self.named_parameters():
+                network_name = n.split(".")[0]
+                if classifier and network_name != "mvcnn":
+                    continue
+                elif not classifier and network_name == "mvcnn":
+                    continue
                 # retrieve the consolidated mean and fisher information.
                 n = n.replace('.', '__')
                 mean = torch.tensor(getattr(self, '{}_mean'.format(n)))
@@ -230,20 +235,11 @@ class Model(nn.Module):
             # ewc loss is 0 if there's no consolidated parameters.
             return torch.zeros(1).to(device)
 
-    def to_cpu(self, tensors):
-        torch.cuda.empty_cache()
-        cpu_tensors = []
-        for t in tensors:
-            cpu_tensors.append(t.cpu())
-            torch.cuda.empty_cache()
-            torch.cuda.synchronize()
-        return tuple(cpu_tensors)
-
     def estimate_fisher(self, data_loader, args):
         # sample loglikelihoods from the dataset.
         loglikelihoods_grads = []
         for i, data in enumerate(data_loader, 1):
-            print(f"Allocated: {torch.cuda.memory_allocated(0)}B\tReserverd: {torch.cuda.memory_reserved(0)}B\tTotal memory: {torch.cuda.get_device_properties(0).total_memory}B")
+            print(f"batch {i} Allocated: {torch.cuda.memory_allocated(0)}B\tReserverd: {torch.cuda.memory_reserved(0)}B\tTotal memory: {torch.cuda.get_device_properties(0).total_memory}B")
             
             images, viewpoints, labels = [tensor.to(args.device) for tensor in data]
             images = images.view(-1, images.shape[-3], images.shape[-2], images.shape[-1]).contiguous()
@@ -255,8 +251,19 @@ class Model(nn.Module):
             # only taking first three channels as the 4th channel is a mask
             class_predictions = self.mvcnn(silhouettes[:, :3, :, :])
             torch.cuda.synchronize()
-            loglikelihoods = F.log_softmax(class_predictions, dim=1)[range(args.batch_size_classifier), labels.data].cpu()
-            loglikelihoods_grads.append(self.to_cpu(autograd.grad(l, self.parameters(), retain_graph=True) for l in loglikelihoods.unbind()))
+            loglikelihoods = F.log_softmax(class_predictions, dim=1)[range(args.batch_size_classifier), labels.data].cpu().unbind()
+            for j, l in enumerate(loglikelihoods, 1):
+                gradients = autograd.grad(l, self.parameters(), retain_graph=(j < len(loglikelihoods)))
+                torch.cuda.synchronize()
+                print(f"{j}Allocated: {torch.cuda.memory_allocated(0)}B\tReserverd: {torch.cuda.memory_reserved(0)}B\tTotal memory: {torch.cuda.get_device_properties(0).total_memory}B")
+                
+                loglikelihoods_grads += [g.cpu() for g in gradients]
+                print(f"{j}Allocated: {torch.cuda.memory_allocated(0)}B\tReserverd: {torch.cuda.memory_reserved(0)}B\tTotal memory: {torch.cuda.get_device_properties(0).total_memory}B")
+
+                del gradients
+                torch.cuda.empty_cache()
+                print(f"{j}Allocated: {torch.cuda.memory_allocated(0)}B\tReserverd: {torch.cuda.memory_reserved(0)}B\tTotal memory: {torch.cuda.get_device_properties(0).total_memory}B")
+
             del silhouettes, class_predictions, images, viewpoints, labels, loglikelihoods
             torch.cuda.empty_cache()
             if i >= args.fisher_estimation_sample_size // args.batch_size_classifier:

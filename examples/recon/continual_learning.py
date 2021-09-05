@@ -71,12 +71,12 @@ def train(dataset_train, model, optimizer, directory_output, image_output, start
                                                                task='train')
         laplacian_loss = laplacian_loss.mean()
         flatten_loss = flatten_loss.mean()
-        # ewc_loss = model.ewc_loss(cuda=True)
+        ewc_loss = model.ewc_loss(device=args.device, classifier=False)
 
         # compute loss
         loss = multiview_iou_loss(render_images, images_a, images_b) + \
             args.lambda_laplacian * laplacian_loss + \
-            args.lambda_flatten * flatten_loss  # + ewc_loss
+            args.lambda_flatten * flatten_loss + ewc_loss
 
         losses.update(loss.data.item(), images_a.size(0))
 
@@ -95,6 +95,7 @@ def train(dataset_train, model, optimizer, directory_output, image_output, start
             torch.save({
                 'model': model.state_dict(),
                 'optimizer': optimizer.state_dict(),
+                'iter': i
             }, model_path)
 
         # save demo images
@@ -110,8 +111,8 @@ def train(dataset_train, model, optimizer, directory_output, image_output, start
                 image_output, '%07d_input.png' % i), img_cvt(images_a[0]))
 
         if i % args.print_freq == 0:
-            log_str = 'Iter: [{0}/{1}]\tTime {batch_time.val:.3f}\tLoss {loss.val:.3f}\tlr {lr:.6f}\tsv {sv:.6f}\t'.format(i, args.num_iterations,
-                                                                                                                           batch_time=batch_time, loss=losses, lr=lr, sv=model.rasterizer.sigma_val)
+            log_str = 'Iter: [{0}/{1}]\tTime {batch_time.val:.3f}\tLoss {loss.val:.3f}\tlr {lr:.6f}\tsv {sv:.6f}\tewc {ewc:.6f}'.format(i, args.num_iterations,
+                                                                                                                           batch_time=batch_time, loss=losses, lr=lr, sv=model.rasterizer.sigma_val,ewc=ewc_loss.item())
             logger.info(log_str)
 
     # 2nd traning phase which focus on training the 3D shape classifier
@@ -141,23 +142,23 @@ def train(dataset_train, model, optimizer, directory_output, image_output, start
 
             # compute cross entropy loss
             ce_loss = classification_loss_fn(class_predictions, labels)
+            ewc_loss = model.ewc_loss(device=args.device, classifier=True)
 
             # accuracy
             _max_values, max_indices = torch.max(class_predictions, dim=1)
             batch_acc = torch.sum(max_indices == labels) / args.batch_size_classifier
-            # TODO solve data imbalance problem undersample vs oversample ?
-            # ewc_loss = model.ewc_loss(cuda=True)
+            loss = ce_loss + ewc_loss
 
             accuracies.append(batch_acc.item())
-            losses.append(ce_loss.item())
+            losses.append(loss.item())
             # compute gradient and optimize
             optimizer.zero_grad()
-            ce_loss.backward()
+            loss.backward()
             optimizer.step()
     
             batch_time.update(time.time() - end)
             end = time.time()
-            logger.info('Batch {0}\tTime: {batch_time.val:.3f}\t CE Loss: {ce_loss:.3f}\tBatch accuracy: {acc:.3f}'.format(batch_idx, batch_time=batch_time, ce_loss=ce_loss.item(), acc=batch_acc.item()))
+            logger.info('Batch {0}\tTime: {batch_time.val:.3f}\tCE Loss: {ce_loss:.3f}\tBatch accuracy: {acc:.3f}\tEWC: {ewc:.3f}'.format(batch_idx, batch_time=batch_time, ce_loss=ce_loss.item(), acc=batch_acc.item(), ewc=ewc_loss.item()))
 
         # end of epoch
         epoch_time.update(time.time() - epoch_end)
@@ -165,6 +166,12 @@ def train(dataset_train, model, optimizer, directory_output, image_output, start
         log_str = 'Epoch: [{0}/{1}]\tEpoch time: {epoch_time.val:.3f}\tAverage CE Loss: {ce_loss:.3f}\tEpoch accuracy: {acc:.3f}'.format(i, args.num_epochs_classifier,
                                                                                                                     epoch_time=epoch_time, ce_loss=sum(losses)/len(losses), acc=sum(accuracies)/len(accuracies))
         logger.info(log_str)
+
+    if args.consolidate:
+        logger.info("=> Estimating diagonals of the fisher information matrix...")
+        print_memory()
+        fisher_matrix = model.estimate_fisher(args=args, data_loader=train_dataloader)
+        model.consolidate(fisher_matrix)
 
 
 def validate(dataset_val, model, directory_mesh, args):
@@ -256,6 +263,8 @@ def adjust_sigma(sigma, i):
         sigma *= decay
     return sigma
 
+def print_memory():
+    logger.info(f"Allocated: {torch.cuda.memory_allocated(0)}B\tReserverd: {torch.cuda.memory_reserved(0)}B\tTotal memory: {torch.cuda.get_device_properties(0).total_memory}B")
 
 if __name__ == "__main__":
 
@@ -293,11 +302,13 @@ if __name__ == "__main__":
     parser.add_argument('--fisher_estimation_sample_size', type=int, default=1024)
     parser.add_argument('--k', type=int, default=3, help="Number of classes for each task in continual learning.")
     parser.add_argument('--num-workers', type=int, default=NUM_WORKERS, help="Number of workers for dataloaders.")
+    parser.add_argument('--consolidate', action='store_true', help="Use of EWC loss to consolidate neural network.")
 
     args = parser.parse_args()
     args.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.enabled = True
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
     np.random.seed(args.seed)
@@ -350,20 +361,20 @@ if __name__ == "__main__":
                 [state_dict["mvcnn.classifier.6.bias"], initial_output_weights[1]], dim=0)
             model.load_state_dict(state_dict)
         optimizer = torch.optim.Adam(model.model_param(args.learning_rate_classifier), args.learning_rate)
-
-        if args.resume_path and task_number == 1:
-            state_dicts = torch.load(args.resume_path)
-            model.load_state_dict(state_dicts['model'])
-            # optimizer.load_state_dict(state_dicts['optimizer'])
-            start_iter = int(os.path.split(args.resume_path)[1][11:].split('.')[0]) + 1
-            logger.info('Resuming from %s iteration for task %d' % (start_iter, task_number))
+        # if args.resume_path and task_number == 1:
+        #     state_dicts = torch.load(args.resume_path)
+        #     model.load_state_dict(state_dicts['model'])
+        #     # optimizer.load_state_dict(state_dicts['optimizer'])
+        #     # start_iter = state_dicts['iter']
+        #     logger.info('Resuming from %s iteration for task %d' % (start_iter, task_number))
+        #     del state_dicts
+        #     torch.cuda.empty_cache()
 
         # display current classes that we are training/validating on
         logger.info(
             f"Training on {train_ids} which correspond to {[datasets.class_ids_map.get(train_id) for train_id in train_ids]}")
         logger.info(
             f"Validating on {val_ids} which correspond to {[datasets.class_ids_map.get(val_id) for val_id in val_ids]}")
-
         model.train()
         dataset_train = datasets.ShapeNet(
             args.dataset_directory, train_ids, 'train')
@@ -374,9 +385,6 @@ if __name__ == "__main__":
         os.makedirs(task_image_output, exist_ok=True)
         train(dataset_train=dataset_train, model=model,
               optimizer=optimizer, directory_output=task_directory_output, image_output=task_image_output, start_iter=start_iter, args=args, dataloader=train_dataloader)
-        # model.consolidate(model.estimate_fisher(
-        #     dataset_train, args.fisher_estimation_sample_size
-        # ))
 
         # delete train dataset to free memory
         del dataset_train
@@ -387,15 +395,20 @@ if __name__ == "__main__":
         os.makedirs(task_directory_mesh, exist_ok=True)
         validate(dataset_val, model, directory_mesh=task_directory_mesh, args=args)
 
-        num_set -= 1
-        if num_set:
-            train_ids = [class_ids.pop() for _ in range(args.k)]
-            val_ids.extend(train_ids)
-
         # store model weights
         state_dict = model.state_dict()
         torch.save({
                 'model': state_dict,
                 'optimizer': optimizer.state_dict(),
+                'iter': 0,
+                'task_number': task_number,
+                'train_ids': train_ids,
+                'val_ids': val_ids
             }, os.path.join(directory_output, "{}.pt".format(str(task_number))))
+        
+        num_set -= 1
+        if num_set:
+            train_ids = [class_ids.pop() for _ in range(args.k)]
+            val_ids.extend(train_ids)
+
         task_number += 1
