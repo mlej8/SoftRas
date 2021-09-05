@@ -38,7 +38,7 @@ SAVE_FREQ = 10000
 RANDOM_SEED = 0
 
 MODEL_DIRECTORY = 'data/results/models'
-DATASET_DIRECTORY = '/mnt/e/Data/mesh_reconstruction'
+DATASET_DIRECTORY = 'data/datasets'
 
 IMAGE_SIZE = 64
 SIGMA_VAL = 1e-4
