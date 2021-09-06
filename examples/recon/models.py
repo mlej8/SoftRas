@@ -270,7 +270,7 @@ class Model(nn.Module):
                 break
                 
         # estimate the fisher information of the parameters.
-        loglikelihood_grads = zip(*loglikelihood_grads)
+        loglikelihood_grads = zip(*loglikelihoods_grads)
         loglikelihood_grads = [torch.stack(gs) for gs in loglikelihood_grads]
         fisher_diagonals = [(g ** 2).mean(0) for g in loglikelihood_grads]
         param_names = [
