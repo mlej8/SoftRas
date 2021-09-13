@@ -7,7 +7,9 @@ from torchvision import models, transforms
 import soft_renderer as sr
 import soft_renderer.functional as srf
 import math
+import logging
 
+logger = logging.getLogger(__name__)
 
 class Encoder(nn.Module):
     def __init__(self, dim_in=4, dim_out=512, dim1=64, dim2=1024, im_size=64):
@@ -239,7 +241,7 @@ class Model(nn.Module):
         # sample loglikelihoods from the dataset.
         loglikelihoods_grads = []
         for i, data in enumerate(data_loader, 1):
-            print(f"batch {i} Allocated: {torch.cuda.memory_allocated(0)}B\tReserverd: {torch.cuda.memory_reserved(0)}B\tTotal memory: {torch.cuda.get_device_properties(0).total_memory}B")
+            logger.info(f"batch {i} Allocated: {torch.cuda.memory_allocated(0)}B\tReserverd: {torch.cuda.memory_reserved(0)}B\tTotal memory: {torch.cuda.get_device_properties(0).total_memory}B")
             
             images, viewpoints, labels = [tensor.to(args.device) for tensor in data]
             images = images.view(-1, images.shape[-3], images.shape[-2], images.shape[-1]).contiguous()
@@ -255,14 +257,14 @@ class Model(nn.Module):
             for j, l in enumerate(loglikelihoods, 1):
                 gradients = autograd.grad(l, self.parameters(), retain_graph=(j < len(loglikelihoods)))
                 torch.cuda.synchronize()
-                print(f"{j}Allocated: {torch.cuda.memory_allocated(0)}B\tReserverd: {torch.cuda.memory_reserved(0)}B\tTotal memory: {torch.cuda.get_device_properties(0).total_memory}B")
+                logger.info(f"{j}Allocated: {torch.cuda.memory_allocated(0)}B\tReserverd: {torch.cuda.memory_reserved(0)}B\tTotal memory: {torch.cuda.get_device_properties(0).total_memory}B")
                 
                 loglikelihoods_grads.append(tuple(g.cpu() for g in gradients))
-                print(f"{j}Allocated: {torch.cuda.memory_allocated(0)}B\tReserverd: {torch.cuda.memory_reserved(0)}B\tTotal memory: {torch.cuda.get_device_properties(0).total_memory}B")
+                logger.info(f"{j}Allocated: {torch.cuda.memory_allocated(0)}B\tReserverd: {torch.cuda.memory_reserved(0)}B\tTotal memory: {torch.cuda.get_device_properties(0).total_memory}B")
 
                 del gradients
                 torch.cuda.empty_cache()
-                print(f"{j}Allocated: {torch.cuda.memory_allocated(0)}B\tReserverd: {torch.cuda.memory_reserved(0)}B\tTotal memory: {torch.cuda.get_device_properties(0).total_memory}B")
+                logger.info(f"{j}Allocated: {torch.cuda.memory_allocated(0)}B\tReserverd: {torch.cuda.memory_reserved(0)}B\tTotal memory: {torch.cuda.get_device_properties(0).total_memory}B")
 
             del silhouettes, class_predictions, images, viewpoints, labels, loglikelihoods
             torch.cuda.empty_cache()

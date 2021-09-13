@@ -20,7 +20,7 @@ CLASS_IDS_ALL = (
     '02691156,02828884,02933112,02958343,03001627,03211117,03636649,' +
     '03691459,04090263,04256520,04379243,04401088,04530566')
 
-NUM_WORKERS = 8
+NUM_WORKERS = 0
 BATCH_SIZE = 64
 BATCH_SIZE_CLASSIFIER = 8
 LEARNING_RATE = 1e-4
@@ -28,6 +28,7 @@ LEARNING_RATE_CLASSIFIER = 5e-5
 LR_TYPE = 'step'
 NUM_ITERATIONS = 250000
 NUM_EPOCHS_CLASSIFIER = 5 # TODO combat overfitting... 
+FISHER_ESTIMATION_SAMPLE_SIZE = 256
 
 LAMBDA_LAPLACIAN = 5e-3
 LAMBDA_FLATTEN = 5e-4
@@ -299,7 +300,7 @@ if __name__ == "__main__":
     parser.add_argument('-df', '--demo-freq', type=int, default=DEMO_FREQ)
     parser.add_argument('-sf', '--save-freq', type=int, default=SAVE_FREQ)
     parser.add_argument('-s', '--seed', type=int, default=RANDOM_SEED)
-    parser.add_argument('--fisher_estimation_sample_size', type=int, default=1024)
+    parser.add_argument('--fisher_estimation_sample_size', type=int, default=FISHER_ESTIMATION_SAMPLE_SIZE)
     parser.add_argument('--k', type=int, default=3, help="Number of classes for each task in continual learning.")
     parser.add_argument('--num-workers', type=int, default=NUM_WORKERS, help="Number of workers for dataloaders.")
     parser.add_argument('--consolidate', action='store_true', help="Use of EWC loss to consolidate neural network.")
