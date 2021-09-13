@@ -257,7 +257,7 @@ class Model(nn.Module):
                 torch.cuda.synchronize()
                 print(f"{j}Allocated: {torch.cuda.memory_allocated(0)}B\tReserverd: {torch.cuda.memory_reserved(0)}B\tTotal memory: {torch.cuda.get_device_properties(0).total_memory}B")
                 
-                loglikelihoods_grads += [g.cpu() for g in gradients]
+                loglikelihoods_grads.append(tuple(g.cpu() for g in gradients))
                 print(f"{j}Allocated: {torch.cuda.memory_allocated(0)}B\tReserverd: {torch.cuda.memory_reserved(0)}B\tTotal memory: {torch.cuda.get_device_properties(0).total_memory}B")
 
                 del gradients
