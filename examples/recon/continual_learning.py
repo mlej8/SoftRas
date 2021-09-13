@@ -20,7 +20,7 @@ CLASS_IDS_ALL = (
     '02691156,02828884,02933112,02958343,03001627,03211117,03636649,' +
     '03691459,04090263,04256520,04379243,04401088,04530566')
 
-NUM_WORKERS = 24
+NUM_WORKERS = 8
 BATCH_SIZE = 64
 BATCH_SIZE_CLASSIFIER = 8
 LEARNING_RATE = 1e-4
@@ -38,7 +38,7 @@ SAVE_FREQ = 10000
 RANDOM_SEED = 0
 
 MODEL_DIRECTORY = 'data/results/models'
-DATASET_DIRECTORY = '/mnt/e/Data/mesh_reconstruction'
+DATASET_DIRECTORY = 'data/datasets'
 
 IMAGE_SIZE = 64
 SIGMA_VAL = 1e-4
@@ -316,7 +316,7 @@ if __name__ == "__main__":
     date_time = datetime.now().strftime("%Y-%m-%d-%H-%M")
 
     # train output directories
-    directory_output = os.path.join(args.model_directory, args.experiment_id, date_time)
+    directory_output = os.path.join("/scratch/mlej8/softras", args.experiment_id, date_time)
     os.makedirs(directory_output, exist_ok=True)
     image_output = os.path.join(directory_output, 'pic')
     os.makedirs(image_output, exist_ok=True)
