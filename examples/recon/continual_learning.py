@@ -316,7 +316,7 @@ if __name__ == "__main__":
     date_time = datetime.now().strftime("%Y-%m-%d-%H-%M")
 
     # train output directories
-    directory_output = os.path.join("/scratch/mlej8/softras", args.experiment_id, date_time)
+    directory_output = os.path.join(args.model_directory, args.experiment_id, date_time)
     os.makedirs(directory_output, exist_ok=True)
     image_output = os.path.join(directory_output, 'pic')
     os.makedirs(image_output, exist_ok=True)

@@ -20,4 +20,4 @@ source env/bin/activate
 # validation python version
 python --version
 
-python examples/recon/continual_learning.py -eid cl --consolidate > continual_learning_consolidate.log 2>&1
+python examples/recon/continual_learning.py -eid cl -md /scratch/mlej8/softras --consolidate > continual_learning_consolidate.log 2>&1
