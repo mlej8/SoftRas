@@ -225,8 +225,8 @@ class Model(nn.Module):
                     continue
                 # retrieve the consolidated mean and fisher information.
                 n = n.replace('.', '__')
-                mean = torch.tensor(getattr(self, '{}_mean'.format(n)))
-                fisher = torch.tensor(getattr(self, '{}_fisher'.format(n)))
+                mean = getattr(self, '{}_mean'.format(n)).clone().detach()
+                fisher = getattr(self, '{}_fisher'.format(n)).clone().detach()
                 # calculate a ewc loss. (assumes the parameter's prior as
                 # gaussian distribution with the estimated mean and the
                 # estimated cramer-rao lower bound variance, which is
@@ -240,8 +240,9 @@ class Model(nn.Module):
     def estimate_fisher(self, data_loader, args):
         # sample loglikelihoods from the dataset.
         loglikelihoods_grads = []
+        grads = None
         for i, data in enumerate(data_loader, 1):
-            logger.info(f"batch {i} Allocated: {torch.cuda.memory_allocated(0)}B\tReserverd: {torch.cuda.memory_reserved(0)}B\tTotal memory: {torch.cuda.get_device_properties(0).total_memory}B")
+            logger.info(f"Batch {i} Allocated: {torch.cuda.memory_allocated(0)}B\tReserverd: {torch.cuda.memory_reserved(0)}B\tTotal memory: {torch.cuda.get_device_properties(0).total_memory}B")
             
             images, viewpoints, labels = [tensor.to(args.device) for tensor in data]
             images = images.view(-1, images.shape[-3], images.shape[-2], images.shape[-1]).contiguous()
@@ -255,13 +256,15 @@ class Model(nn.Module):
             torch.cuda.synchronize()
             loglikelihoods = F.log_softmax(class_predictions, dim=1)[range(args.batch_size_classifier), labels.data].cpu().unbind()
             for j, l in enumerate(loglikelihoods, 1):
-                gradients = autograd.grad(l, self.parameters(), retain_graph=(j < len(loglikelihoods)))
+                gradients = (g.cpu() for g in autograd.grad(l, self.parameters(), retain_graph=(j < len(loglikelihoods))))
+                if grads:
+                    # accumulate the squared of gradients
+                    for k, g in enumerate(gradients):
+                        grads[k] += g ** 2
+                else:
+                    grads = [g**2 for g in gradients]
                 torch.cuda.synchronize()
                 logger.info(f"{j}Allocated: {torch.cuda.memory_allocated(0)}B\tReserverd: {torch.cuda.memory_reserved(0)}B\tTotal memory: {torch.cuda.get_device_properties(0).total_memory}B")
-                
-                loglikelihoods_grads.append(tuple(g.cpu() for g in gradients))
-                logger.info(f"{j}Allocated: {torch.cuda.memory_allocated(0)}B\tReserverd: {torch.cuda.memory_reserved(0)}B\tTotal memory: {torch.cuda.get_device_properties(0).total_memory}B")
-
                 del gradients
                 torch.cuda.empty_cache()
                 logger.info(f"{j}Allocated: {torch.cuda.memory_allocated(0)}B\tReserverd: {torch.cuda.memory_reserved(0)}B\tTotal memory: {torch.cuda.get_device_properties(0).total_memory}B")
@@ -272,9 +275,7 @@ class Model(nn.Module):
                 break
                 
         # estimate the fisher information of the parameters.
-        loglikelihood_grads = zip(*loglikelihoods_grads)
-        loglikelihood_grads = [torch.stack(gs) for gs in loglikelihood_grads]
-        fisher_diagonals = [(g ** 2).mean(0) for g in loglikelihood_grads]
+        fisher_diagonals = [torch.div(g, args.fisher_estimation_sample_size) for g in grads]
         param_names = [
             n.replace('.', '__') for n, p in self.named_parameters()
         ]
