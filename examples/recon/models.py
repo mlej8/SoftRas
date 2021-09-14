@@ -227,8 +227,8 @@ class Model(nn.Module):
                     continue
                 # retrieve the consolidated mean and fisher information.
                 n = n.replace('.', '__')
-                mean = torch.tensor(getattr(self, '{}_mean'.format(n)))
-                fisher = torch.tensor(getattr(self, '{}_fisher'.format(n)))
+                mean = getattr(self, '{}_mean'.format(n)).clone().detach()
+                fisher = getattr(self, '{}_fisher'.format(n)).clone().detach()
                 # calculate a ewc loss. (assumes the parameter's prior as
                 # gaussian distribution with the estimated mean and the
                 # estimated cramer-rao lower bound variance, which is

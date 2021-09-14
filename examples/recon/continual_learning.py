@@ -20,7 +20,7 @@ CLASS_IDS_ALL = (
     '02691156,02828884,02933112,02958343,03001627,03211117,03636649,' +
     '03691459,04090263,04256520,04379243,04401088,04530566')
 
-NUM_WORKERS = 8
+NUM_WORKERS = 0
 BATCH_SIZE = 64
 BATCH_SIZE_CLASSIFIER = 8
 LEARNING_RATE = 1e-4
@@ -344,6 +344,11 @@ if __name__ == "__main__":
     task_number = 1
 
     while num_set:
+         # display current classes that we are training/validating on
+        logger.info(
+            f"Training on {train_ids} which correspond to {[datasets.class_ids_map.get(train_id) for train_id in train_ids]}")
+        logger.info(
+            f"Validating on {val_ids} which correspond to {[datasets.class_ids_map.get(val_id) for val_id in val_ids]}")
 
         # setup model & optimizer
         model = models.Model('data/obj/sphere/sphere_642.obj', args=args, num_classes=len(val_ids))
@@ -359,22 +364,27 @@ if __name__ == "__main__":
                 [state_dict["mvcnn.classifier.6.weight"], initial_output_weights[0]], dim=0)
             state_dict["mvcnn.classifier.6.bias"] = torch.cat(
                 [state_dict["mvcnn.classifier.6.bias"], initial_output_weights[1]], dim=0)
-            model.load_state_dict(state_dict)
+            _missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+            for uk in unexpected_keys:
+                model.register_buffer(uk, state_dict[uk])
         optimizer = torch.optim.Adam(model.model_param(args.learning_rate_classifier), args.learning_rate)
-        # if args.resume_path and task_number == 1:
-        #     state_dicts = torch.load(args.resume_path)
-        #     model.load_state_dict(state_dicts['model'])
-        #     # optimizer.load_state_dict(state_dicts['optimizer'])
-        #     # start_iter = state_dicts['iter']
-        #     logger.info('Resuming from %s iteration for task %d' % (start_iter, task_number))
-        #     del state_dicts
-        #     torch.cuda.empty_cache()
+        if args.resume_path and task_number == 1:
+            state_dicts = torch.load(args.resume_path, map_location=args.device)
+            _missing_keys, unexpected_keys = model.load_state_dict(state_dicts['model'], strict=False)
+            for uk in unexpected_keys:
+                model.register_buffer(uk, state_dicts['model'][uk])
+            if state_dicts.get("optimizer"):
+                optimizer.load_state_dict(state_dicts['optimizer'])
+            start_iter = state_dicts['iter']
+            if not 'checkpoint' in args.resume_path:
+                train_ids = state_dicts["train_ids"]
+                val_ids = state_dicts["val_ids"]
+                num_set = state_dicts["num_set"]
+                task_number = state_dicts["task_number"]
+            del state_dicts
+            torch.cuda.empty_cache()
+            logger.info('Resuming from %s iteration for task %d' % (start_iter, task_number))
 
-        # display current classes that we are training/validating on
-        logger.info(
-            f"Training on {train_ids} which correspond to {[datasets.class_ids_map.get(train_id) for train_id in train_ids]}")
-        logger.info(
-            f"Validating on {val_ids} which correspond to {[datasets.class_ids_map.get(val_id) for val_id in val_ids]}")
         model.train()
         dataset_train = datasets.ShapeNet(
             args.dataset_directory, train_ids, 'train')
@@ -395,20 +405,21 @@ if __name__ == "__main__":
         os.makedirs(task_directory_mesh, exist_ok=True)
         validate(dataset_val, model, directory_mesh=task_directory_mesh, args=args)
 
-        # store model weights
-        state_dict = model.state_dict()
-        torch.save({
-                'model': state_dict,
-                'optimizer': optimizer.state_dict(),
-                'iter': 0,
-                'task_number': task_number,
-                'train_ids': train_ids,
-                'val_ids': val_ids
-            }, os.path.join(directory_output, "{}.pt".format(str(task_number))))
-        
         num_set -= 1
         if num_set:
             train_ids = [class_ids.pop() for _ in range(args.k)]
             val_ids.extend(train_ids)
 
         task_number += 1
+
+        # store model weights
+        state_dict = model.state_dict()
+        torch.save({
+                'model': state_dict,
+                'iter': 0,
+                'task_number': task_number,
+                'num_set': num_set,
+                'train_ids': train_ids,
+                'val_ids': val_ids
+            }, os.path.join(directory_output, "{}.pt".format(str(task_number))))
+        
