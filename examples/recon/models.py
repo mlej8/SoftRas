@@ -240,7 +240,7 @@ class Model(nn.Module):
     def estimate_fisher(self, data_loader, args):
         # sample loglikelihoods from the dataset.
         loglikelihoods_grads = []
-        grads = None
+        squared_grads = None
         for i, data in enumerate(data_loader, 1):
             logger.info(f"Batch {i} Allocated: {torch.cuda.memory_allocated(0)}B\tReserverd: {torch.cuda.memory_reserved(0)}B\tTotal memory: {torch.cuda.get_device_properties(0).total_memory}B")
             
@@ -254,15 +254,15 @@ class Model(nn.Module):
             # only taking first three channels as the 4th channel is a mask
             class_predictions = self.mvcnn(silhouettes[:, :3, :, :])
             torch.cuda.synchronize()
-            loglikelihoods = F.log_softmax(class_predictions, dim=1)[range(args.batch_size_classifier), labels.data].cpu().unbind()
+            loglikelihoods = F.log_softmax(class_predictions, dim=1)[range(args.batch_size_classifier), labels.data].unbind()
             for j, l in enumerate(loglikelihoods, 1):
-                gradients = (g.cpu() for g in autograd.grad(l, self.parameters(), retain_graph=(j < len(loglikelihoods))))
-                if grads:
+                gradients = (g for g in autograd.grad(l, self.parameters(), retain_graph=(j < len(loglikelihoods))))
+                if squared_grads:
                     # accumulate the squared of gradients
                     for k, g in enumerate(gradients):
-                        grads[k] += g ** 2
+                        squared_grads[k] += g ** 2
                 else:
-                    grads = [g**2 for g in gradients]
+                    squared_grads = [g**2 for g in gradients]
                 torch.cuda.synchronize()
                 logger.info(f"{j}Allocated: {torch.cuda.memory_allocated(0)}B\tReserverd: {torch.cuda.memory_reserved(0)}B\tTotal memory: {torch.cuda.get_device_properties(0).total_memory}B")
                 del gradients
@@ -275,7 +275,7 @@ class Model(nn.Module):
                 break
                 
         # estimate the fisher information of the parameters.
-        fisher_diagonals = [torch.div(g, args.fisher_estimation_sample_size) for g in grads]
+        fisher_diagonals = [torch.div(g, args.fisher_estimation_sample_size) for g in squared_grads]
         param_names = [
             n.replace('.', '__') for n, p in self.named_parameters()
         ]

@@ -365,26 +365,36 @@ if __name__ == "__main__":
                 [state_dict["mvcnn.classifier.6.weight"], initial_output_weights[0]], dim=0)
             state_dict["mvcnn.classifier.6.bias"] = torch.cat(
                 [state_dict["mvcnn.classifier.6.bias"], initial_output_weights[1]], dim=0)
+            
+            # adapt size of fisher matrix buffers for new network
+            state_dict["mvcnn_classifier_6_weight_mean"] = torch.cat([state_dict["mvcnn.classifier.6.weight"], initial_output_weights[0]], dim=0)
+            state_dict["mvcnn_classifier_6_weight_fisher"] = torch.cat([state_dict["mvcnn.classifier.6.bias"], initial_output_weights[1]], dim=0)
+            
+            state_dict['mvcnn__classifier__6__weight_mean'] = torch.cat([state_dict['mvcnn__classifier__6__weight_mean'], initial_output_weights[0]], dim=0)
+            state_dict['mvcnn__classifier__6__weight_fisher'] = torch.cat([state_dict['mvcnn__classifier__6__weight_fisher'], initial_output_weights[0]], dim=0)
+            state_dict['mvcnn__classifier__6__bias_mean'] = torch.cat([state_dict['mvcnn__classifier__6__bias_mean'], initial_output_weights[1]], dim=0)
+            state_dict['mvcnn__classifier__6__bias_fisher'] = torch.cat([state_dict['mvcnn__classifier__6__bias_fisher'], initial_output_weights[1]], dim=0)
+            
             _missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
             for uk in unexpected_keys:
                 model.register_buffer(uk, state_dict[uk])
         optimizer = torch.optim.Adam(model.model_param(args.learning_rate_classifier), args.learning_rate)
-        if args.resume_path and task_number == 1:
-            state_dicts = torch.load(args.resume_path, map_location=args.device)
-            _missing_keys, unexpected_keys = model.load_state_dict(state_dicts['model'], strict=False)
-            for uk in unexpected_keys:
-                model.register_buffer(uk, state_dicts['model'][uk])
-            if state_dicts.get("optimizer"):
-                optimizer.load_state_dict(state_dicts['optimizer'])
-            start_iter = state_dicts['iter']
-            if not 'checkpoint' in args.resume_path:
-                train_ids = state_dicts["train_ids"]
-                val_ids = state_dicts["val_ids"]
-                num_set = state_dicts["num_set"]
-                task_number = state_dicts["task_number"]
-            del state_dicts
-            torch.cuda.empty_cache()
-            logger.info('Resuming from %s iteration for task %d' % (start_iter, task_number))
+        # if args.resume_path and task_number == 1:
+        #     state_dicts = torch.load(args.resume_path, map_location=args.device)
+        #     _missing_keys, unexpected_keys = model.load_state_dict(state_dicts['model'], strict=False)
+        #     for uk in unexpected_keys:
+        #         model.register_buffer(uk, state_dicts['model'][uk])
+        #     if state_dicts.get("optimizer"):
+        #         optimizer.load_state_dict(state_dicts['optimizer'])
+        #     start_iter = state_dicts['iter']
+        #     if not 'checkpoint' in args.resume_path:
+        #         train_ids = state_dicts["train_ids"]
+        #         val_ids = state_dicts["val_ids"]
+        #         num_set = state_dicts["num_set"]
+        #         task_number = state_dicts["task_number"]
+        #     del state_dicts
+        #     torch.cuda.empty_cache()
+        #     logger.info('Resuming from %s iteration for task %d' % (start_iter, task_number))
 
         model.train()
         dataset_train = datasets.ShapeNet(
@@ -422,5 +432,5 @@ if __name__ == "__main__":
                 'num_set': num_set,
                 'train_ids': train_ids,
                 'val_ids': val_ids
-            }, os.path.join(directory_output, "{}.pt".format(str(task_number))))
+            }, os.path.join(directory_output, "{}.pt".format(str(task_number-1))))
         
