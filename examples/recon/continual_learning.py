@@ -16,9 +16,11 @@ import logging
 
 from torch.utils.data import DataLoader
 
+# CLASS_IDS_ALL = (
+#     '02691156,02828884,02933112,02958343,03001627,03211117,03636649,' +
+#     '03691459,04090263,04256520,04379243,04401088,04530566')
 CLASS_IDS_ALL = (
-    '02691156,02828884,02933112,02958343,03001627,03211117,03636649,' +
-    '03691459,04090263,04256520,04379243,04401088,04530566')
+    '04256520,02828884')
 
 NUM_WORKERS = 0
 BATCH_SIZE = 64
@@ -300,7 +302,7 @@ if __name__ == "__main__":
     parser.add_argument('-sf', '--save-freq', type=int, default=SAVE_FREQ)
     parser.add_argument('-s', '--seed', type=int, default=RANDOM_SEED)
     parser.add_argument('--fisher_estimation_sample_size', type=int, default=1024)
-    parser.add_argument('--k', type=int, default=3, help="Number of classes for each task in continual learning.")
+    parser.add_argument('--k', type=int, default=1, help="Number of classes for each task in continual learning.")
     parser.add_argument('--num-workers', type=int, default=NUM_WORKERS, help="Number of workers for dataloaders.")
     parser.add_argument('--consolidate', action='store_true', help="Use of EWC loss to consolidate neural network.")
 
@@ -333,7 +335,7 @@ if __name__ == "__main__":
     logger = logging.getLogger(__name__)
 
     # exclude one class to make 4 sets of 3 classes
-    class_ids.pop()
+    # class_ids.pop()
 
     train_ids = val_ids = [class_ids.pop() for i in range(args.k)]
     state_dict = None
