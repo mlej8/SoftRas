@@ -354,7 +354,6 @@ if __name__ == "__main__":
 
         # setup model & optimizer
         model = models.Model('data/obj/sphere/sphere_642.obj', args=args, num_classes=len(val_ids))
-        model = model.to(args.device)
 
         start_iter = START_ITERATION
 
@@ -387,6 +386,7 @@ if __name__ == "__main__":
             torch.cuda.empty_cache()
             logger.info('Resuming from %s iteration for task %d' % (start_iter, task_number))
 
+        model = model.to(args.device)
         model.train()
         dataset_train = datasets.ShapeNet(
             args.dataset_directory, train_ids, 'train')
